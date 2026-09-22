@@ -6,3 +6,4 @@ stats.html
 .DS_Store
 .idea/
 .playwright-mcp/
+.claude/settings.local.json

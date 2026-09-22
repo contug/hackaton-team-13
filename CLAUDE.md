@@ -21,6 +21,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **Verify:** the command or manual check that confirms it
 ```
 
+- **Verify:** should name the test that covers the change (`npm test -- tests/openrouter.test.ts`, and the test's own name), not just "ran the build". If nothing covers it, say that explicitly.
+
 ---
 
 ## Goal
@@ -62,6 +64,8 @@ Pre-installed in `node_modules`; `package.json` pins these exact versions so `np
 | `eslint` | 9.39.4 |
 | `@mozilla/readability` | 0.6.0 |
 
+The test stack is caret-ranged rather than pinned: `vitest` 5, `jsdom` 30, `@testing-library/react` 16 with `/dom`, `/user-event` and `/jest-dom`. Vitest 5 wants `vite: ^8`, which is the installed Vite. `wxt/testing/fake-browser` and `wxt/testing/vitest-plugin` ship inside `wxt` — do not add `@webext-core/fake-browser` separately. See [Testing](#testing).
+
 **LLM provider is OpenRouter**, not the Anthropic API. The user supplies their own OpenRouter key and picks any model. The LLM layer is a thin `fetch` against OpenRouter's OpenAI-compatible `/api/v1/chat/completions` — there is no SDK dependency, and none should be added.
 
 ## Commands
@@ -78,17 +82,55 @@ npx wxt prepare      # regenerate .wxt/ types — run this if imports look untyp
 
 `wxt prepare` generates `.wxt/`, which supplies the types for the auto-imported `defineContentScript`, `defineBackground`, `createShadowRootUi`, `storage`, and `browser`. If TypeScript cannot find those, `.wxt/` is missing or stale — that is the fix, not adding imports.
 
+## Testing
+
+```bash
+npm test             # vitest run — the whole suite, once
+npm run test:watch   # vitest in watch mode
+npm run check        # tsc --noEmit && vitest run
+```
+
+**Run the test suite after every change, in every session and every worktree.** `npm run check` (typecheck + full suite) before reporting any work as done. A `PostToolUse` hook in `.claude/settings.json` runs the related tests automatically after each edit, but that is a safety net, not a substitute — the hook only runs *related* tests, so the full suite is still yours to run.
+
+New behavior in `lib/` or `components/` ships with a test in the same change. If you deliberately skip one, say so and say why in the `claude-changelog.md` entry.
+
+```
+vitest.config.ts           # jsdom + WxtVitest() — the plugin is what makes `@/`,
+                           # WXT auto-imports and `browser` resolve in tests
+tests/
+  setup.ts                 # jest-dom matchers, fakeBrowser.reset(), jsdom stubs
+  helpers.ts               # queued `fetch` mock (mockFetch / completion / jsonResponse)
+  fixtures.ts              # snapshotFixture(), article HTML
+  openrouter.test.ts       # the three-step fallback chain, clamping, error mapping
+  snapshot.test.ts         # DOM -> PageSnapshot
+  refs.test.ts             # the ref registry (uses vi.resetModules — module state)
+  prompts.test.ts          # the rendered prompt contract
+  handlers.test.ts         # lib/handlers.ts against fakeBrowser storage
+  App.test.tsx             # the product rules, incl. "one answer at a time"
+  AskBox / SuggestionChips / cards .test.tsx
+```
+
+`lib/handlers.ts` holds the background message router precisely so it can be called directly from `handlers.test.ts`; `entrypoints/background.ts` keeps only the listener wiring. Keep it that way.
+
+### What the suite does not cover, and the jsdom caveats
+
+- **Extension injection.** No jsdom test can load an MV3 extension. Whether the content script actually injects into a real page is still unverified — see `claude-changelog.md`.
+- **Real layout.** jsdom's `getBoundingClientRect()` returns all zeros, which would make `isRendered()` in `lib/snapshot.ts` reject *every* element and leave the outline tests vacuous. `tests/setup.ts` stubs the rect: a visible default, or `data-test-rect="top,height"` when an element carries it. So "hidden because it has zero size" is simulated, not tested. `display`/`visibility`/`opacity` filtering is real — but jsdom does not cascade `display` to descendants, only `visibility`.
+- **`innerText`.** Not implemented by jsdom; `tests/setup.ts` maps it to `textContent`, which is not rendering-aware.
+- **Shadow DOM and Tailwind.** Components are mounted directly by Testing Library, not inside a shadow root, so nothing here checks the panel against hostile host-page CSS.
+
 ## Architecture
 
 ```
 entrypoints/
-  background.ts            # sole holder of the API key; all network I/O
+  background.ts            # service-worker entry: onMessage wiring only
   overlay.content/
     index.tsx              # defineContentScript + createShadowRootUi
     App.tsx                # FAB + panel state machine
     style.css
 components/                # ApiKeySetup, AskBox, AnswerCard, SummaryCard, SuggestionChips
 lib/
+  handlers.ts              # the message router: sole reader of the API key, all network I/O
   snapshot.ts              # DOM -> PageSnapshot (Readability + navigation outline)
   refs.ts                  # element <-> ref-id registry (the future-interaction seam)
   messaging.ts             # typed content <-> background protocol
