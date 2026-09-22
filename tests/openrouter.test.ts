@@ -4,6 +4,8 @@ import {
   askAboutPage,
   friendlyError,
   listModels,
+  nextSteps,
+  stepArray,
   summarizePage,
   validateKey,
 } from '@/lib/openrouter';
@@ -21,9 +23,10 @@ const GOOD_SUMMARY = {
 
 const GOOD_ANSWER = {
   answer: 'Click Upgrade.',
-  steps: ['Press Upgrade'],
+  steps: [{ text: 'Press Upgrade', ref: 'e2', fill: '' }],
   refs: ['e2'],
   suggestions: ['What does it cost?'],
+  goal_reached: false,
 };
 
 /** A 400 whose message names `response_format` — the schema-unsupported signal. */
@@ -192,7 +195,7 @@ describe('clamping', () => {
       completion(
         JSON.stringify({
           answer: ' Do this. ',
-          steps: ['1', '2', '3', '4'],
+          steps: [1, 2, 3, 4, 5, 6].map((n) => ({ text: `step ${n}`, ref: '', fill: '' })),
           refs: ['e1', 'e2', 'e3', 'e4'],
         }),
       ),
@@ -201,9 +204,11 @@ describe('clamping', () => {
     const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
 
     expect(answer.answer).toBe('Do this.');
-    expect(answer.steps).toHaveLength(3);
+    // Five, not three: a walkthrough needs more rungs than a one-shot answer.
+    expect(answer.steps).toHaveLength(5);
     expect(answer.refs).toEqual(['e1', 'e2', 'e3']);
     expect(answer.suggestions).toEqual([]);
+    expect(answer.goal_reached).toBe(false);
   });
 });
 
@@ -330,68 +335,70 @@ describe('listModels', () => {
   });
 });
 
-describe('target_reason — the "why this element" sentence', () => {
-  it('asks for it in the schema, as a required property', async () => {
+describe('steps — the walkthrough contract', () => {
+  it('asks for step objects in the schema, with all three keys required', async () => {
     const fetchStub = mockFetch();
     fetchStub.queue.push(() => completion(JSON.stringify(GOOD_ANSWER)));
 
     await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
 
     const schema = fetchStub.calls[0]!.body.response_format.json_schema.schema;
+    const step = schema.properties.steps.items;
+
+    expect(step.type).toBe('object');
+    expect(step.additionalProperties).toBe(false);
     // Strict mode rejects a property that is not also in `required`, which is
-    // why the "no target" case is an empty string and not a missing field.
-    expect(schema.properties.target_reason).toBeDefined();
-    expect(schema.required).toContain('target_reason');
+    // why "no ref" and "no fill" are empty strings and not missing keys.
+    expect(step.required).toEqual(['text', 'ref', 'fill']);
+    expect(Object.keys(step.properties).sort()).toEqual(['fill', 'ref', 'text']);
+    expect(schema.required).toContain('goal_reached');
+    expect(schema.properties.goal_reached.type).toBe('boolean');
+    expect(schema.properties.target_reason).toBeUndefined();
   });
 
-  it('carries the reason through, squashed and trimmed', async () => {
+  it('carries text, ref and fill through, squashed and trimmed', async () => {
     const fetchStub = mockFetch();
     fetchStub.queue.push(() =>
       completion(
         JSON.stringify({
           ...GOOD_ANSWER,
-          target_reason: '  This button   starts\n the plan change.  ',
+          steps: [
+            { text: '  Type   the\n product name  ', ref: 'e8', fill: '  wool   socks ' },
+            { text: 'Press Search', ref: 'e9', fill: '' },
+          ],
         }),
       ),
     );
 
     const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
 
-    expect(answer.target_reason).toBe('This button starts the plan change.');
+    expect(answer.steps).toEqual([
+      { text: 'Type the product name', ref: 'e8', fill: 'wool socks' },
+      { text: 'Press Search', ref: 'e9', fill: '' },
+    ]);
   });
 
-  it('defaults to an empty string when the model omits it', async () => {
-    const fetchStub = mockFetch();
-    fetchStub.queue.push(() => completion(JSON.stringify(GOOD_ANSWER)));
-
-    const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
-
-    expect(answer.target_reason).toBe('');
-  });
-
-  it('caps a rambling reason', async () => {
+  it('reports goal_reached when the model says the goal is already met', async () => {
     const fetchStub = mockFetch();
     fetchStub.queue.push(() =>
-      completion(JSON.stringify({ ...GOOD_ANSWER, target_reason: 'word '.repeat(80) })),
+      completion(JSON.stringify({ ...GOOD_ANSWER, steps: [], goal_reached: true })),
+    );
+
+    const answer = await askAboutPage('k', 'm', snapshotFixture(), 'am I done?', []);
+
+    expect(answer.goal_reached).toBe(true);
+  });
+
+  it('treats a non-boolean goal_reached as false rather than truthy', async () => {
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() =>
+      completion(JSON.stringify({ ...GOOD_ANSWER, goal_reached: 'yes' })),
     );
 
     const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
 
-    expect(answer.target_reason.length).toBeLessThanOrEqual(140);
-  });
-
-  it('drops a reason that points at nothing', async () => {
-    const fetchStub = mockFetch();
-    fetchStub.queue.push(() =>
-      completion(
-        JSON.stringify({ ...GOOD_ANSWER, refs: [], target_reason: 'Press the big green button.' }),
-      ),
-    );
-
-    const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
-
-    // A reason with no ref to attach to is incoherent output, not a highlight.
-    expect(answer.target_reason).toBe('');
+    // A truthy string would silently end a walkthrough that had barely started.
+    expect(answer.goal_reached).toBe(false);
   });
 
   it('is empty on the raw-text fallback, so the chain gains no new branch', async () => {
@@ -402,6 +409,122 @@ describe('target_reason — the "why this element" sentence', () => {
     const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
 
     expect(answer.answer).toBe('Still no JSON.');
-    expect(answer.target_reason).toBe('');
+    expect(answer.steps).toEqual([]);
+    expect(answer.goal_reached).toBe(false);
+  });
+});
+
+/**
+ * `stepArray` is exported rather than exercised only through `askAboutPage`
+ * because it is the one guard between a model's imagination and the element the
+ * extension is about to ring or type into.
+ */
+describe('stepArray', () => {
+  it('returns [] for anything that is not an array', () => {
+    for (const value of [undefined, null, 'steps', 42, { text: 'a' }]) {
+      expect(stepArray(value, 5)).toEqual([]);
+    }
+  });
+
+  it('drops entries that are not plain objects', () => {
+    const steps = stepArray(
+      ['Press Search', null, 42, ['nested'], { text: 'Press Search', ref: 'e1', fill: '' }],
+      5,
+    );
+
+    // The old `strArray` would have returned [] for the whole list, which is
+    // how this feature would have failed closed and silently.
+    expect(steps).toEqual([{ text: 'Press Search', ref: 'e1', fill: '' }]);
+  });
+
+  it('drops a step with no usable text', () => {
+    const steps = stepArray(
+      [{ text: '   ', ref: 'e1', fill: '' }, { text: 'Real step', ref: '', fill: '' }, { ref: 'e2' }],
+      5,
+    );
+
+    expect(steps).toEqual([{ text: 'Real step', ref: '', fill: '' }]);
+  });
+
+  it('blanks a ref that is not in the shape we mint', () => {
+    const steps = stepArray(
+      [
+        { text: 'a', ref: 'e12', fill: '' },
+        { text: 'b', ref: '#search-box', fill: '' },
+        { text: 'c', ref: 'button.submit', fill: '' },
+        { text: 'd', ref: 'E4', fill: '' },
+        { text: 'e', ref: 7, fill: '' },
+      ],
+      5,
+    );
+
+    expect(steps.map((step) => step.ref)).toEqual(['e12', '', '', '', '']);
+  });
+
+  it('caps the list and the fill length', () => {
+    const steps = stepArray(
+      Array.from({ length: 9 }, (_, i) => ({ text: `step ${i}`, ref: '', fill: 'x '.repeat(300) })),
+      5,
+    );
+
+    expect(steps).toHaveLength(5);
+    expect(steps[0]!.fill.length).toBeLessThanOrEqual(200);
+    expect(steps[0]!.fill).not.toMatch(/\s$/);
+  });
+});
+
+describe('nextSteps — the re-plan after a navigation', () => {
+  it('sends the goal and the done list, and no transcript', async () => {
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() => completion(JSON.stringify(GOOD_ANSWER)));
+
+    await nextSteps('k', 'm', snapshotFixture(), 'buy wool socks', [
+      'Type the product name',
+      'Press Search',
+    ]);
+
+    const messages = fetchStub.calls[0]!.body.messages as Array<{ role: string; content: string }>;
+    // One system message and one user message: the transcript is deliberately
+    // not what survives a page load — the goal and the progress are.
+    expect(messages.map((m) => m.role)).toEqual(['system', 'user']);
+    expect(messages[1]!.content).toContain("The user's goal: buy wool socks");
+    expect(messages[1]!.content).toContain('1. Type the product name');
+    expect(messages[1]!.content).toContain('2. Press Search');
+    expect(messages[1]!.content).toContain('https://example.com/pricing');
+  });
+
+  it('clamps its answer through the same path as ask', async () => {
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() =>
+      completion(
+        JSON.stringify({
+          answer: 'Nearly there.',
+          steps: [{ text: 'Press Add to cart', ref: 'e404', fill: '' }, 'junk'],
+          refs: [],
+          suggestions: [],
+          goal_reached: false,
+        }),
+      ),
+    );
+
+    const answer = await nextSteps('k', 'm', snapshotFixture(), 'buy socks', []);
+
+    expect(answer.steps).toEqual([{ text: 'Press Add to cart', ref: 'e404', fill: '' }]);
+  });
+
+  it('falls back to raw text with no steps, like ask does', async () => {
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() => completion('no json'));
+    fetchStub.queue.push(() => completion('still no json'));
+
+    const answer = await nextSteps('k', 'm', snapshotFixture(), 'buy socks', []);
+
+    expect(answer).toEqual({
+      answer: 'still no json',
+      steps: [],
+      refs: [],
+      suggestions: [],
+      goal_reached: false,
+    });
   });
 });

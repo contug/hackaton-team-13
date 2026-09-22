@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import Spotlight from '@/components/Spotlight';
+import type { Step } from '@/lib/openrouter';
 import { refFor } from '@/lib/refs';
 
 /**
@@ -26,19 +27,31 @@ async function nextFrame(): Promise<void> {
   });
 }
 
+const STEP: Step = { text: 'This is the button that ends the plan.', ref: 'e999', fill: '' };
+
 function mount(over: Partial<Parameters<typeof Spotlight>[0]> = {}) {
-  const onLost = vi.fn();
-  const onDismiss = vi.fn();
+  const handlers = {
+    onLost: vi.fn(),
+    onDismiss: vi.fn(),
+    onNext: vi.fn(),
+    onSkip: vi.fn(),
+    onFill: vi.fn(),
+  };
+  const props = { ...handlers, ...over };
   const view = render(
     <Spotlight
       targetRef={over.targetRef ?? 'e999'}
       label={over.label ?? 'Cancel subscription'}
-      reason={over.reason ?? 'This is the button that ends the plan.'}
-      onDismiss={over.onDismiss ?? onDismiss}
-      onLost={over.onLost ?? onLost}
+      step={over.step ?? STEP}
+      position={over.position ?? null}
+      onDismiss={props.onDismiss}
+      onNext={props.onNext}
+      onSkip={props.onSkip}
+      onFill={props.onFill}
+      onLost={props.onLost}
     />,
   );
-  return { ...view, onLost: over.onLost ?? onLost, onDismiss: over.onDismiss ?? onDismiss };
+  return { ...view, ...props };
 }
 
 describe('Spotlight', () => {
@@ -206,4 +219,82 @@ describe('Spotlight', () => {
 
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
+});
+
+describe('Spotlight — the walkthrough controls', () => {
+  it('shows the counter, Next and Skip for a step in a walkthrough', async () => {
+    const user = userEvent.setup();
+    const target = place('<button data-test-rect="300,40">Search</button>');
+    const { onNext, onSkip } = mount({
+      targetRef: refFor(target),
+      position: { index: 1, total: 4 },
+    });
+
+    expect(screen.getByTestId('spotlight-tooltip')).toHaveTextContent('Step 2 of 4');
+
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Skip' }));
+
+    // The watchers are heuristics; these are what guarantee the user is never
+    // stuck on a step the extension thinks they have not done.
+    expect(onNext).toHaveBeenCalledTimes(1);
+    expect(onSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows no counter and no Next or Skip when the highlight is not a step', () => {
+    const target = place('<button data-test-rect="300,40">Upgrade</button>');
+    mount({ targetRef: refFor(target), position: null });
+
+    // A ref the user picked from "On this page" is not a rung on a ladder —
+    // there is nothing to be next.
+    expect(screen.getByTestId('spotlight-tooltip')).not.toHaveTextContent(/Step \d+ of/);
+    expect(screen.queryByRole('button', { name: 'Next' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Skip' })).not.toBeInTheDocument();
+  });
+
+  it('offers to fill a field the step suggests text for', async () => {
+    const user = userEvent.setup();
+    const target = place('<input data-test-rect="300,40" />');
+    const ref = refFor(target);
+    const { onFill } = mount({
+      targetRef: ref,
+      step: { text: 'Type the product name', ref, fill: 'wool socks' },
+      position: { index: 0, total: 2 },
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Fill this in' }));
+
+    // The button IS the confirmation gate: nothing is ever typed automatically,
+    // and the component does not fill — it calls back up to `App.tsx`.
+    expect(onFill).toHaveBeenCalledTimes(1);
+  });
+
+  it('offers no fill for a step that suggests no text', () => {
+    const target = place('<input data-test-rect="300,40" />');
+    const ref = refFor(target);
+    mount({ targetRef: ref, step: { text: 'Press Search', ref, fill: '' } });
+
+    expect(screen.queryByRole('button', { name: 'Fill this in' })).not.toBeInTheDocument();
+  });
+
+  const refused: Array<[string, string]> = [
+    ['a password field', '<input type="password" data-test-rect="300,40" />'],
+    ['a card number field', '<input autocomplete="cc-number" data-test-rect="300,40" />'],
+    ['a one-time code field', '<input autocomplete="one-time-code" data-test-rect="300,40" />'],
+    ['a readonly field', '<input readonly data-test-rect="300,40" />'],
+    ['a contenteditable box', '<div contenteditable role="textbox" data-test-rect="300,40"></div>'],
+    ['a plain button', '<button data-test-rect="300,40">Search</button>'],
+  ];
+
+  for (const [label, html] of refused) {
+    it(`offers no fill for ${label}, even when the model asked for one`, () => {
+      const target = place(html);
+      const ref = refFor(target);
+      mount({ targetRef: ref, step: { text: 'Type it in', ref, fill: 'wool socks' } });
+
+      // A button we would only answer `blocked` or `unsupported` for is worse
+      // than no button at all.
+      expect(screen.queryByRole('button', { name: 'Fill this in' })).not.toBeInTheDocument();
+    });
+  }
 });

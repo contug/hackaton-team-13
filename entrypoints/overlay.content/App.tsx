@@ -3,13 +3,27 @@ import AnswerCard, { type RefTarget } from '@/components/AnswerCard';
 import ApiKeySetup from '@/components/ApiKeySetup';
 import AskBox from '@/components/AskBox';
 import Skeleton from '@/components/Skeleton';
-import Spotlight from '@/components/Spotlight';
+import Spotlight, { type StepPosition } from '@/components/Spotlight';
 import SuggestionChips from '@/components/SuggestionChips';
 // Explicit, like every other component here. It used to ride on WXT's
 // auto-imports, which only exist inside a WXT build.
 import SummaryCard from '@/components/SummaryCard';
+import { useStepWatcher } from '@/components/useStepWatcher';
+import { useUrlWatcher } from '@/components/useUrlWatcher';
+import { fillField } from '@/lib/autofill';
+import {
+  advance,
+  currentStep,
+  jumpTo,
+  replan,
+  resolvableSteps,
+  skip,
+  startJourney,
+  type Journey,
+} from '@/lib/journey';
 import { sendToBackground, type SettingsView } from '@/lib/messaging';
-import type { Answer, Summary, Turn } from '@/lib/openrouter';
+import type { Answer, Step, Summary, Turn } from '@/lib/openrouter';
+import { resolveRef } from '@/lib/refs';
 import { buildSnapshot, type PageSnapshot } from '@/lib/snapshot';
 import { DEFAULT_MODEL } from '@/lib/settings';
 import { pickSpotlightRef } from '@/lib/spotlight';
@@ -26,13 +40,12 @@ type Result =
 type View = 'loading' | 'setup' | 'assistant';
 
 /**
- * What is ringed on the page right now. One slot, like `result`: a second
- * highlight would be a second thing to look at.
- *
- * The label and the reason are captured when it is set, so the highlight does
- * not depend on `snapshotRef.current`, which the next question overwrites.
+ * A ref the user picked from "On this page", which is not a walkthrough step.
+ * It takes precedence over the step-derived highlight while it is set, and one
+ * of the two is always null — never both — so the panel's `role="status"` block
+ * always describes exactly what is on the page.
  */
-type Highlight = { ref: string; label: string; reason: string };
+type Picked = { ref: string; label: string; text: string };
 
 const PANEL_BASE =
   'fixed right-5 bottom-5 z-[2147483000] flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl transition-[width,max-height] duration-200 focus:outline-none';
@@ -62,20 +75,51 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
-  // Conversation state lives here, in this tab's content script, and dies with
-  // the page. Nothing is shared with other tabs or kept in the background.
+  // The transcript still lives here, in this tab's content script, and still
+  // dies with the page. Only the journey is mirrored to the background.
   const [history, setHistory] = useState<Turn[]>([]);
-  const [spotlight, setSpotlight] = useState<Highlight | null>(null);
+
+  /**
+   * The walkthrough. The on-page highlight is *derived* from this rather than
+   * being its own slot: advancing a step is what re-points the spotlight, and
+   * because `useSpotlightRect`'s effect keys on the target ref, the new target
+   * scrolls itself into view for free.
+   */
+  const [journey, setJourney] = useState<Journey | null>(null);
+  const [picked, setPicked] = useState<Picked | null>(null);
   const snapshotRef = useRef<PageSnapshot | null>(null);
+
+  // Read by callbacks that must not re-subscribe on every journey change.
+  const journeyRef = useRef<Journey | null>(null);
+  journeyRef.current = journey;
+
+  /** True once the background has answered "is there a journey for this tab?". */
+  const [restored, setRestored] = useState(false);
+  const bootstrappedRef = useRef(false);
 
   const fabRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
+  /**
+   * Every journey change is mirrored to the background immediately, because
+   * there is no "about to navigate, save now" hook to lean on: `ctx.onInvalidated`
+   * does not fire on navigation and there is no reliable async write during
+   * `pagehide`. Saving on change means the step the user just clicked is
+   * already stored by the time the page starts unloading.
+   */
+  const persist = useCallback((next: Journey | null) => {
+    setJourney(next);
+    // A journey change is always the authoritative highlight, so a stale pick
+    // never survives one.
+    setPicked(null);
+    void sendToBackground(
+      next ? { type: 'saveJourney', journey: next } : { type: 'clearJourney' },
+    );
+  }, []);
+
   const runSummary = useCallback(async () => {
     setBusy(true);
     setError(null);
-    // A summary points at the page as a whole, not at one control.
-    setSpotlight(null);
 
     const snapshot = buildSnapshot();
     snapshotRef.current = snapshot;
@@ -90,44 +134,166 @@ export default function App() {
     setResult({ kind: 'summary', data: res.data });
   }, []);
 
-  const loadSettings = useCallback(async () => {
-    const res = await sendToBackground({ type: 'getSettings' });
-    if (!res.ok) {
-      setError(res.error);
-      setView('setup');
-      return;
-    }
-    setSettings(res.data);
-    setView(res.data.hasApiKey ? 'assistant' : 'setup');
-    if (res.data.hasApiKey) void runSummary();
-  }, [runSummary]);
+  /**
+   * Same goal, new page. This is the whole point of the feature: the user acted
+   * on a step, the page navigated and destroyed everything, and what they see
+   * next is the next rungs of the same ladder rather than a blank panel.
+   */
+  const replanFor = useCallback(
+    async (j: Journey) => {
+      setBusy(true);
+      setError(null);
 
-  // Settings load and the first summary are deferred until the panel opens —
-  // no network and no DOM walk for a user who never asks for help.
+      const snapshot = buildSnapshot();
+      snapshotRef.current = snapshot;
+
+      const res = await sendToBackground({
+        type: 'nextSteps',
+        snapshot,
+        goal: j.goal,
+        done: j.done,
+      });
+      setBusy(false);
+
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+
+      // The goal is the question: this card was never a reply to anything the
+      // user typed on *this* page.
+      setResult({ kind: 'answer', question: j.goal, data: res.data });
+
+      if (res.data.goal_reached) {
+        persist(null);
+        return;
+      }
+      const steps = resolvableSteps(res.data.steps, snapshot.outline);
+      persist(replan(j, steps, snapshot.meta.url, Date.now()));
+    },
+    [persist],
+  );
+
+  /**
+   * Settings, then either the first summary or a re-plan of a restored journey.
+   * Guarded by a ref rather than by `view`, because both triggers below can
+   * land in the same tick.
+   */
+  const bootstrap = useCallback(
+    async (pending: Journey | null) => {
+      if (bootstrappedRef.current) return;
+      bootstrappedRef.current = true;
+
+      const res = await sendToBackground({ type: 'getSettings' });
+      if (!res.ok) {
+        setError(res.error);
+        setView('setup');
+        return;
+      }
+      setSettings(res.data);
+      setView(res.data.hasApiKey ? 'assistant' : 'setup');
+      if (!res.data.hasApiKey) return;
+
+      if (pending) await replanFor(pending);
+      else await runSummary();
+    },
+    [runSummary, replanFor],
+  );
+
+  /**
+   * On mount, ask whether this tab was part-way through a walkthrough. This is
+   * the only thing that runs before the user touches anything, and it is not
+   * network — it is a local message that reads one session-storage key. No
+   * OpenRouter traffic and no DOM walk happen unless it comes back with a
+   * journey.
+   */
   useEffect(() => {
-    if (!open || view !== 'loading') return;
-    void loadSettings();
-  }, [open, view, loadSettings]);
+    let cancelled = false;
+    void (async () => {
+      const res = await sendToBackground({ type: 'getJourney' });
+      if (cancelled) return;
+      if (res.ok && res.data) {
+        setJourney(res.data);
+        // Restoring `panelOpen` is what makes a full page load invisible to the
+        // user: the panel comes back exactly as they left it.
+        if (res.data.panelOpen) setOpen(true);
+      }
+      setRestored(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /**
+   * Network and the DOM walk stay deferred until there is a reason: the user
+   * opened the panel, or a journey survived a page load. A restored journey
+   * bootstraps even with the panel collapsed, because the highlight outlives
+   * the panel and it is the highlight the user went off to act on.
+   */
+  useEffect(() => {
+    if (!restored || view !== 'loading') return;
+    if (!open && journey === null) return;
+    void bootstrap(journey);
+  }, [restored, open, view, journey, bootstrap]);
 
   // Registered only while there is something to dismiss. Capture-phase
   // `stopPropagation` is invasive — the host page should keep its own Escape
   // when we have nothing on screen.
   useEffect(() => {
-    if (!open && !spotlight) return;
+    if (!open && !journey && !picked) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
-      // Capture phase: many host pages swallow keydown before it bubbles.
+      // Capture phase: many host pages swallow keydown before it bubbles. This
+      // is the one deliberate exception to the read-only rule the step watcher
+      // follows — Escape is a key host pages routinely eat.
       e.stopPropagation();
-      setSpotlight(null);
+      persist(null);
       if (open) close();
     }
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [open, spotlight]);
+  }, [open, journey, picked, persist]);
 
   useEffect(() => {
     if (open) panelRef.current?.focus();
   }, [open]);
+
+  /**
+   * Keep the stored `panelOpen` honest, so the next page comes back the way the
+   * user left this one. Converges in one pass: after the write the flags match
+   * and the effect bails.
+   */
+  useEffect(() => {
+    const j = journeyRef.current;
+    if (!j || j.panelOpen === open) return;
+    persist({ ...j, panelOpen: open });
+  }, [open, journey, persist]);
+
+  const step = currentStep(journey);
+
+  // The user did the step we were pointing at. Advancing records it in `done`,
+  // which is the only memory of the pages we have already left.
+  useStepWatcher({
+    step,
+    onDone: useCallback(() => {
+      const j = journeyRef.current;
+      if (j) persist(advance(j));
+    }, [persist]),
+  });
+
+  // An SPA route change is a new page as far as the plan is concerned. A full
+  // page load is handled by the mount-time restore instead.
+  useUrlWatcher(
+    useCallback(
+      (url: string) => {
+        const j = journeyRef.current;
+        if (!j || j.url === url) return;
+        void replanFor({ ...j, url });
+      },
+      [replanFor],
+    ),
+  );
 
   function close() {
     setOpen(false);
@@ -137,9 +303,10 @@ export default function App() {
   async function ask(question: string) {
     setBusy(true);
     setError(null);
-    // Cleared before the request, not after it: a highlight that outlived its
-    // answer would point at the last question's target while this one loads.
-    setSpotlight(null);
+    // A new question is a new goal, so the old walkthrough is gone. Cleared
+    // before the request, not after it: a highlight that outlived its answer
+    // would point at the last question's target while this one loads.
+    persist(null);
 
     // Re-snapshot per question: SPAs mutate constantly, and a stale outline
     // would have us pointing at controls that are no longer there.
@@ -157,19 +324,32 @@ export default function App() {
     setResult({ kind: 'answer', question, data: res.data });
     setHistory((prev) => [...prev, { question, answer: res.data.answer }].slice(-6));
 
-    // `pickSpotlightRef` is what keeps an invented ref id from ringing whatever
-    // element happens to hold it — the outline here is the one we just sent.
+    if (res.data.goal_reached) return;
+
+    const steps = resolvableSteps(res.data.steps, snapshot.outline);
+    if (steps.length > 0) {
+      // The question IS the goal — `AskBox`'s framing asks for one.
+      persist(startJourney(question, steps, snapshot.meta.url, Date.now()));
+      return;
+    }
+
+    // No steps to walk, but the answer may still point at one control. Fall
+    // back to the single highlight, which is all this used to do.
     const ref = pickSpotlightRef(res.data.refs, snapshot.outline);
     const entry = ref ? snapshot.outline.find((e) => e.ref === ref) : undefined;
-    setSpotlight(
-      ref && entry ? { ref, label: entry.name, reason: res.data.target_reason } : null,
-    );
+    if (ref && entry) setPicked({ ref, label: entry.name, text: res.data.answer });
   }
 
-  /** The answer's refs that exist in the outline, as clickable targets. */
-  function refTargets(refs: string[]): RefTarget[] {
+  /**
+   * The answer's refs that exist in the outline and are *not* already a step's
+   * target, so the panel does not say the same thing twice.
+   */
+  function refTargets(answer: Answer): RefTarget[] {
     const outline = snapshotRef.current?.outline ?? [];
-    return refs
+    const covered = new Set((journey?.steps ?? []).map((s) => s.ref).filter(Boolean));
+
+    return answer.refs
+      .filter((ref) => !covered.has(ref))
       .map((ref) => {
         const entry = outline.find((e) => e.ref === ref);
         return entry ? { ref, label: entry.name } : null;
@@ -177,16 +357,31 @@ export default function App() {
       .filter((target): target is RefTarget => target !== null);
   }
 
-  function highlightRef(ref: string, answer: Answer) {
+  function pickRef(ref: string, answer: Answer) {
     const entry = snapshotRef.current?.outline.find((e) => e.ref === ref);
     if (!entry) return;
-    setSpotlight({
-      ref,
-      label: entry.name,
-      // `target_reason` is about the FIRST ref. For the others the name is all
-      // we can honestly show.
-      reason: ref === answer.refs[0] ? answer.target_reason : '',
-    });
+    setPicked({ ref, label: entry.name, text: answer.answer });
+  }
+
+  /**
+   * The confirmation gate for `lib/autofill.ts`, in one place: this is the only
+   * caller, and it only runs from a press on the tooltip's button. The step is
+   * then treated as done — the watcher's own `input` listener would also catch
+   * our synthetic event, but relying on that would make the fill's effect
+   * depend on a listener the user may have skipped past.
+   */
+  function fillCurrentStep() {
+    const j = journeyRef.current;
+    const target = currentStep(j);
+    if (!j || !target) return;
+
+    const outcome = fillField(resolveRef(target.ref), target.fill);
+    if (outcome !== 'filled') {
+      setNote("Couldn't type that in — you'll need to do it yourself.");
+      return;
+    }
+    setNote(null);
+    persist(advance(j));
   }
 
   if (dismissed) return null;
@@ -197,6 +392,25 @@ export default function App() {
       : result?.kind === 'answer'
         ? result.data.suggestions
         : [];
+
+  /**
+   * What is ringed, as one value. `picked` and the current step are mutually
+   * exclusive by construction — a pick always clears with the journey and a
+   * journey change always clears the pick — so this is never ambiguous.
+   *
+   * A pick carries `fill: ''` whatever the current step suggests: the ring is
+   * not on that step's field, so offering to type into it would be a lie.
+   */
+  const highlight: { label: string; step: Step; position: StepPosition | null } | null =
+    picked !== null
+      ? { label: picked.label, step: { text: picked.text, ref: picked.ref, fill: '' }, position: null }
+      : journey && step && step.ref
+        ? {
+            label: snapshotRef.current?.outline.find((e) => e.ref === step.ref)?.name ?? step.text,
+            step,
+            position: { index: journey.index, total: journey.steps.length },
+          }
+        : null;
 
   const fab = (
       <button
@@ -234,7 +448,7 @@ export default function App() {
             type="button"
             aria-label="Settings"
             onClick={() => {
-              setSpotlight(null);
+              persist(null);
               setView('setup');
             }}
             className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
@@ -297,8 +511,9 @@ export default function App() {
               setView('loading');
               setResult(null);
               setHistory([]);
-              setSpotlight(null);
-              void loadSettings();
+              persist(null);
+              bootstrappedRef.current = false;
+              void bootstrap(null);
             }}
             onCancel={settings.hasApiKey ? () => setView('assistant') : undefined}
           />
@@ -329,11 +544,15 @@ export default function App() {
               <AnswerCard
                 question={result.question}
                 answer={result.data}
-                targets={refTargets(result.data.refs)}
-                onPick={(ref) => highlightRef(ref, (result as { data: Answer }).data)}
-                highlight={
-                  spotlight ? { label: spotlight.label, reason: spotlight.reason } : undefined
-                }
+                steps={journey?.steps ?? []}
+                currentIndex={journey && !picked ? journey.index : null}
+                onPickStep={(index) => {
+                  const j = journeyRef.current;
+                  if (j) persist(jumpTo(j, index));
+                }}
+                targets={refTargets(result.data)}
+                onPick={(ref) => pickRef(ref, (result as { data: Answer }).data)}
+                pickedLabel={picked?.label}
               />
             )}
           </>
@@ -345,13 +564,24 @@ export default function App() {
           {note && <p className="text-[11px] text-amber-700">{note}</p>}
           <SuggestionChips suggestions={suggestions} disabled={busy} onPick={(s) => void ask(s)} />
           <AskBox disabled={busy} autoFocus onSubmit={(q) => void ask(q)} />
-          <button
-            type="button"
-            onClick={() => setDismissed(true)}
-            className="text-[11px] text-slate-400 underline underline-offset-2 hover:text-slate-600"
-          >
-            Hide on this page
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setDismissed(true)}
+              className="text-[11px] text-slate-400 underline underline-offset-2 hover:text-slate-600"
+            >
+              Hide on this page
+            </button>
+            {journey && (
+              <button
+                type="button"
+                onClick={() => persist(null)}
+                className="text-[11px] text-slate-400 underline underline-offset-2 hover:text-slate-600"
+              >
+                Stop guiding me
+              </button>
+            )}
+          </div>
         </footer>
       )}
     </div>
@@ -366,14 +596,33 @@ export default function App() {
         the open/closed branch, because the highlight outlives the panel — the
         user closes the panel precisely to go and touch the thing.
       */}
-      {spotlight && (
+      {highlight && (
         <Spotlight
-          targetRef={spotlight.ref}
-          label={spotlight.label}
-          reason={spotlight.reason}
+          targetRef={highlight.step.ref}
+          label={highlight.label}
+          step={highlight.step}
+          position={highlight.position}
           avoidRef={open ? panelRef : fabRef}
-          onDismiss={() => setSpotlight(null)}
-          onLost={() => setSpotlight(null)}
+          onDismiss={() => {
+            setPicked(null);
+            if (journeyRef.current) persist(null);
+          }}
+          onNext={() => {
+            const j = journeyRef.current;
+            if (j) persist(advance(j));
+          }}
+          onSkip={() => {
+            const j = journeyRef.current;
+            if (j) persist(skip(j));
+          }}
+          onFill={fillCurrentStep}
+          /**
+           * The target is undrawable — gone, or too big to ring. Only a picked
+           * ref is dropped; a step is left alone, because a step whose element
+           * an SPA re-renders comes back on the next measure, and the panel's
+           * step list is how the user moves on if it does not.
+           */
+          onLost={() => setPicked(null)}
         />
       )}
       {open ? panel : fab}

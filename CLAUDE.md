@@ -39,12 +39,12 @@ A floating button sits on the page. Clicking it opens a small panel that:
 - **It is not a chat.** One answer is on screen at a time; a new answer *replaces* the previous one. There is no scrollback. This is the main structural defense against overload — do not let it drift into a message log.
 - **Brevity is enforced twice:** `maxItems`/length limits in the JSON response schema, *and* explicit instruction in the system prompt.
 - **A real webpage must be open in the tab.** Content scripts match `http(s)` only; `main()` bails out on documents with no body text and no interactive elements.
-- **No cross-tab context.** Every tab gets its own independent instance. Conversation state lives in the content script's React state and dies with the page. Nothing conversational is stored in the background worker.
+- **No cross-tab context, and no stored transcript.** Every tab gets its own independent instance. The conversation lives in the content script's React state and dies with the page; `history` travels up on every `ask` and is dropped again with the response. The one exception is the walkthrough: **the background stores one journey per tab id in session storage — the goal, the current steps and the progress — and never the transcript.** The tab id comes from the `sender` the browser attaches, so a content script cannot ask for another tab's journey, and `tests/handlers.test.ts` asserts that two tab ids never see each other's.
 - **The API key is requested on first load** and never enters the content script.
 
 ### Out of scope for now (seam is in place)
 
-Acting on the page — clicking, filling, scrolling-to, highlighting. The snapshot already assigns stable `ref` ids to elements and the LLM response schema already carries `refs: string[]`, so this lands later as a content-script action handler plus a confirmation gate, with **no change** to the snapshot format or prompt contract. Keep that seam intact.
+Clicking on the user's behalf. Highlighting, scrolling-to and **filling** have landed; pressing a button for them has not, and the seam is the same one — `lib/refs.ts` resolves a ref to a live element and the step contract already names the target.
 
 ---
 
@@ -178,7 +178,25 @@ The read side is now live. After an answer, `App.tsx` rings one element on the p
 - Load-bearing properties (`position`, geometry, `z-index`, `pointer-events`) are inline styles, not Tailwind classes: Tailwind is not compiled in the test environment, so a class assertion there would prove nothing.
 - `position: fixed` inside the shadow root breaks when a host page puts `transform`/`filter`/`contain` on `<body>`. A hidden sentinel is rendered and measured, and `fixedFrameCorrection` divides the error back out — a runtime probe, not a CSS sniff, because the list of properties that create a containing block is always one spec behind. The correction is applied **only** when writing styles; applying it to the geometry inputs leaves the scrim computing bands for a viewport that no longer starts at the origin, which dims nothing.
 - The **panel and the floating button are still not corrected**, so on a page with a transformed `<body>` they land off-screen. That predates the spotlight; it is recorded, not fixed.
-- One highlight at a time, like one answer. It survives the panel being collapsed — the user closes the panel precisely to go and touch the thing — and is cleared by the next question, the tooltip's ✕, Escape, or "Hide on this page".
+- One highlight at a time, like one answer. It survives the panel being collapsed — the user closes the panel precisely to go and touch the thing — and is cleared by the next question, the tooltip's ✕, Escape, "Stop guiding me", `goal_reached`, or "Hide on this page".
+- **The highlight is derived, not its own slot.** `App.tsx` holds a `Journey` and rings `currentStep(journey)?.ref`; advancing a step re-points `<Spotlight targetRef>`, and because `useSpotlightRect`'s effect keys on the target, the new element scrolls itself into view for free. A ref the user picks from "On this page" is the one exception — a separate `picked` slot that takes precedence, and the two are mutually exclusive by construction so the panel's `role="status"` always describes exactly one thing.
+- **`target_reason` is retired.** A step's own `text` is the tooltip copy. Keeping both would be two sources of truth for the same sentence.
+
+### The walkthrough, and the two things that watch for it
+
+`lib/journey.ts` holds the walkthrough state as pure functions over plain JSON, for the same reason `lib/spotlight.ts` is pure: this is the part that must be provable in jsdom. It is also exactly what the background stores, so it has to survive `structuredClone`.
+
+- `components/useStepWatcher.ts` registers **one** listener on `document`, capture phase, chosen by the kind of step: `input` for a step that suggests text, `click` otherwise. Registering both would advance a fill step the moment the user clicked into the field. Both are **strictly read-only** — no `preventDefault`, no `stopPropagation`, because it is the user's own click that does the thing. The Escape handler in `App.tsx` *does* call `stopPropagation()`; that is a deliberate, narrow exception for a key host pages routinely eat, not a pattern to copy.
+- `components/useUrlWatcher.ts` **polls `location.href`** at 500ms. Not `wxt:locationchange`: WXT rewrites the event name to `` `${browser.runtime.id}:${ENTRYPOINT}:wxt:locationchange` ``, so a plain `window.addEventListener` never fires and it would mean plumbing the `ContentScriptContext` into a React component — and WXT's own watcher already polls at 1000ms whenever the Navigation API is missing. jsdom has no Navigation API and does implement `pushState`, so the poll is what makes the re-plan path drivable from a test.
+- The heuristics will sometimes be wrong, so the tooltip carries **Next** and **Skip**. `skip` deliberately does not record the step in `done` — a skipped step there would build the next page's plan on a lie.
+
+### The autofill gate
+
+`lib/autofill.ts` is the only thing in this extension that writes to the host page, and it is acceptable only because it is **user-initiated**: it runs from a press on the tooltip's "Fill this in" button and nowhere else. Nothing fills automatically.
+
+- It uses the **prototype's native `value` setter**, not `el.value = text`. React installs its own `value` property on the element instance, so a plain assignment is invisible to the site's state — the box looks filled and the app disagrees. Then `input` and `change`, bubbling, after `focus()`.
+- **Blocked, never filled:** `type="password"`, `hidden`, `file`, `disabled`, `readOnly`, and any field whose `autocomplete` token is `cc-number`, `cc-csc`, `cc-exp` or `one-time-code`.
+- **Unsupported:** anything that is not an `<input>`, `<textarea>` or `<select>`. Narrowed on `instanceof`, deliberately not on the snapshot's `kind` — `lib/snapshot.ts` calls `role="textbox"`/`role="combobox"` elements `kind: 'field'` too, and a `contenteditable` div has no `.value` at all.
 
 ### Shadow DOM and Tailwind 4
 

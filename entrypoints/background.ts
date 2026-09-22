@@ -1,8 +1,9 @@
 import { browser } from 'wxt/browser';
 import { defineBackground } from 'wxt/utils/define-background';
-import type { BgRequest } from '@/lib/messaging';
+import type { BgRequest, BgSender } from '@/lib/messaging';
 import { handle } from '@/lib/handlers';
 import { friendlyError } from '@/lib/openrouter';
+import { deleteJourney } from '@/lib/settings';
 
 /**
  * All OpenRouter traffic goes through here, for two reasons:
@@ -16,14 +17,27 @@ import { friendlyError } from '@/lib/openrouter';
  *
  * Do not move a call into the content script for convenience. The router itself
  * lives in `lib/handlers.ts` so it stays directly testable.
+ *
+ * The sender is forwarded now rather than discarded: `sender.tab.id` is how a
+ * journey is keyed, and taking it from the browser rather than the message is
+ * what keeps one tab from reading another's.
  */
 export default defineBackground(() => {
-  browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    handle(message as BgRequest)
+  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    handle(message as BgRequest, sender as BgSender)
       .then(sendResponse)
       .catch((err: unknown) => sendResponse({ ok: false, error: friendlyError(err) }));
 
     // Keep the message channel open for the async reply.
     return true;
+  });
+
+  /**
+   * Evict a closed tab's journey. `onRemoved` carries only a tab id, so it
+   * needs no `tabs` permission — the manifest stays `['storage']`. That plus
+   * session storage dying with the browser is the whole eviction story.
+   */
+  browser.tabs.onRemoved.addListener((tabId) => {
+    void deleteJourney(tabId);
   });
 });
