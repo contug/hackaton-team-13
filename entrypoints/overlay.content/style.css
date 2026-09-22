@@ -1,0 +1,35 @@
+@import 'tailwindcss';
+
+/*
+ * The panel lives in a shadow root, so host-page CSS cannot reach in. But `rem`
+ * still resolves against the HOST page's root font size — sites using
+ * `html { font-size: 62.5% }` would render the whole panel at 62.5% scale.
+ * Pinning font-size on our own root is the fix.
+ */
+:host {
+  all: initial;
+  font-size: 16px;
+  color-scheme: light dark;
+}
+
+#page-guide-root {
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    Roboto,
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #page-guide-root *,
+  #page-guide-root *::before,
+  #page-guide-root *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
