@@ -88,7 +88,14 @@ npx wxt prepare      # regenerate .wxt/ types — run this if imports look untyp
 npm test             # vitest run — the whole suite, once
 npm run test:watch   # vitest in watch mode
 npm run check        # tsc --noEmit && vitest run
+npm run harness      # the dev harness on :5199 — real layout, fake background
+npm run test:e2e     # playwright, against the REAL built extension
 ```
+
+`npm run test:e2e` needs `npx wxt build` first, and it loads `.output/chrome-mv3`
+into the Chromium that ships with Playwright. It must be that Chromium: Chrome
+and Edge removed the command-line flags for side-loading an unpacked extension,
+which is the most likely reason the earlier hand-rolled attempt found nothing.
 
 **Run the test suite after every change, in every session and every worktree.** `npm run check` (typecheck + full suite) before reporting any work as done. A `PostToolUse` hook in `.claude/settings.json` runs the related tests automatically after each edit, but that is a safety net, not a substitute — the hook only runs *related* tests, so the full suite is still yours to run.
 
@@ -106,18 +113,23 @@ tests/
   refs.test.ts             # the ref registry (uses vi.resetModules — module state)
   prompts.test.ts          # the rendered prompt contract
   handlers.test.ts         # lib/handlers.ts against fakeBrowser storage
+  spotlight.test.ts        # the spotlight geometry — pure, no DOM at all
+  Spotlight.test.tsx       # the overlay against the real refs registry
   App.test.tsx             # the product rules, incl. "one answer at a time"
   AskBox / SuggestionChips / cards .test.tsx
+dev/                       # the harness: real App, real layout, fake background
+e2e/extension.spec.ts      # the real build, loaded into a real browser
 ```
 
 `lib/handlers.ts` holds the background message router precisely so it can be called directly from `handlers.test.ts`; `entrypoints/background.ts` keeps only the listener wiring. Keep it that way.
 
 ### What the suite does not cover, and the jsdom caveats
 
-- **Extension injection.** No jsdom test can load an MV3 extension. Whether the content script actually injects into a real page is still unverified — see `claude-changelog.md`.
+- **Extension injection is now covered** — by `e2e/extension.spec.ts`, not by the jsdom suite. No jsdom test can load an MV3 extension; that test loads the real build and asserts the `page-guide-ui` shadow host and the floating button appear on an ordinary `http://` page. It is not part of `npm run check`, because it needs a build and a real browser.
 - **Real layout.** jsdom's `getBoundingClientRect()` returns all zeros, which would make `isRendered()` in `lib/snapshot.ts` reject *every* element and leave the outline tests vacuous. `tests/setup.ts` stubs the rect: a visible default, or `data-test-rect="top,height"` when an element carries it. So "hidden because it has zero size" is simulated, not tested. `display`/`visibility`/`opacity` filtering is real — but jsdom does not cascade `display` to descendants, only `visibility`.
 - **`innerText`.** Not implemented by jsdom; `tests/setup.ts` maps it to `textContent`, which is not rendering-aware.
-- **Shadow DOM and Tailwind.** Components are mounted directly by Testing Library, not inside a shadow root, so nothing here checks the panel against hostile host-page CSS.
+- **Shadow DOM and Tailwind.** Components are mounted directly by Testing Library, not inside a shadow root, so nothing in the jsdom suite checks the panel against hostile host-page CSS. `e2e/extension.spec.ts` does, inside the real shadow root.
+- **Spotlight placement.** The rect stub reports `left: 0, width: 200` for every element unless it pins its own size inline, so horizontal centring, horizontal clamping and panel-avoidance are verified as arithmetic over rects a test invented — never against real layout. Tooltip height is 20 for everything, so real above/below flipping is browser-only. `npm run harness` plus `npm run test:e2e` are what cover those.
 
 ## Architecture
 
@@ -128,9 +140,11 @@ entrypoints/
     index.tsx              # defineContentScript + createShadowRootUi
     App.tsx                # FAB + panel state machine
     style.css
-components/                # ApiKeySetup, AskBox, AnswerCard, SummaryCard, SuggestionChips
+components/                # ApiKeySetup, AskBox, AnswerCard, SummaryCard, SuggestionChips,
+                           # Spotlight + useSpotlightRect (the on-page highlight)
 lib/
   handlers.ts              # the message router: sole reader of the API key, all network I/O
+  spotlight.ts             # pure geometry for the on-page highlight (no DOM)
   snapshot.ts              # DOM -> PageSnapshot (Readability + navigation outline)
   refs.ts                  # element <-> ref-id registry (the future-interaction seam)
   messaging.ts             # typed content <-> background protocol
@@ -152,9 +166,19 @@ Do not move an OpenRouter call into the content script for convenience.
 
 Each tab has its own content-script instance holding its own conversation in React state. The background is stateless apart from global settings (key, model). `history` is passed *up* from the content script on every `ask` and is never retained in the background — that is the mechanism that keeps tabs independent. Do not add a background-side conversation map.
 
-### The `refs` seam
+### The `refs` seam, and the spotlight that reads it
 
-`lib/snapshot.ts` assigns short ids (`e1`, `e2`, …) to structural and interactive elements, tracked in `lib/refs.ts` via `WeakMap<Element, string>` + `Map<string, WeakRef<Element>>` inside the content script. `refs` already round-trips through the prompt and response schema. Preserve it even while the UI renders refs inertly.
+`lib/snapshot.ts` assigns short ids (`e1`, `e2`, …) to structural and interactive elements, tracked in `lib/refs.ts` via `WeakMap<Element, string>` + `Map<string, WeakRef<Element>>` inside the content script. `refs` round-trips through the prompt and response schema.
+
+The read side is now live. After an answer, `App.tsx` rings one element on the page and anchors a tooltip beside it saying why:
+
+- `lib/spotlight.ts` holds **all** the arithmetic as pure functions over plain rects, and touches no `window`, `document` or `Element`. jsdom implements no layout, so anything that measured for itself would be untestable. Do not move geometry into the component.
+- `components/useSpotlightRect.ts` measures: it holds the **ref id**, never an `Element`, and re-resolves through `resolveRef` on every measure, which is how an SPA re-render is handled without a MutationObserver. It re-measures on capture-phase `scroll` and `resize` (coalesced through one rAF), a bounded settle loop, and a 500ms heartbeat. No `ResizeObserver` — jsdom has none, so a no-op stub could never fail a test.
+- `components/Spotlight.tsx` draws. It writes **nothing** to the host page — no class, no attribute, no style. The ring is our own box at the target's rect, and the scrim and ring are `pointer-events: none` so the target stays clickable.
+- Load-bearing properties (`position`, geometry, `z-index`, `pointer-events`) are inline styles, not Tailwind classes: Tailwind is not compiled in the test environment, so a class assertion there would prove nothing.
+- `position: fixed` inside the shadow root breaks when a host page puts `transform`/`filter`/`contain` on `<body>`. A hidden sentinel is rendered and measured, and `fixedFrameCorrection` divides the error back out — a runtime probe, not a CSS sniff, because the list of properties that create a containing block is always one spec behind. The correction is applied **only** when writing styles; applying it to the geometry inputs leaves the scrim computing bands for a viewport that no longer starts at the origin, which dims nothing.
+- The **panel and the floating button are still not corrected**, so on a page with a transformed `<body>` they land off-screen. That predates the spotlight; it is recorded, not fixed.
+- One highlight at a time, like one answer. It survives the panel being collapsed — the user closes the panel precisely to go and touch the thing — and is cleared by the next question, the tooltip's ✕, Escape, or "Hide on this page".
 
 ### Shadow DOM and Tailwind 4
 

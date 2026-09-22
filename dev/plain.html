@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Acme Billing — plain fixture</title>
+    <style>
+      body { margin: 0; font: 16px/1.6 system-ui, sans-serif; padding: 40px; }
+      main { max-width: 760px; }
+      button { font: inherit; padding: 9px 16px; margin-right: 8px; }
+      .spacer { height: 1600px; }
+    </style>
+  </head>
+  <body>
+    <!--
+      No App mounted here. This is the page `e2e/extension.spec.ts` loads with
+      the REAL built extension, so the content script has to inject itself.
+      It must be served over http:// — the content script matches http(s) only,
+      so a file:// URL would never get it.
+    -->
+    <main>
+      <h1>Billing &amp; subscription</h1>
+      <p>
+        Your workspace is on the Pro plan, billed yearly. The next charge is scheduled for 12
+        March. Downgrades take effect immediately and are prorated against the remaining
+        balance on the account, which is why the confirmation step names an amount.
+      </p>
+      <h2>Payment method</h2>
+      <p>Visa ending 4242, expires 09/28.</p>
+      <form>
+        <label for="card">Card number</label>
+        <input id="card" type="text" placeholder="card number" required />
+      </form>
+      <div class="spacer"></div>
+      <h2>Close your account</h2>
+      <p>Cancelling ends access at the end of the current period.</p>
+      <button type="button" id="cancel">Cancel subscription</button>
+      <button type="button">Pause instead</button>
+      <!--
+        Room below the target on purpose. Without it the page is already at its
+        maximum scroll when the spotlight asks to centre the button, the browser
+        clamps, and the button ends up at the very bottom of the viewport.
+      -->
+      <div class="spacer"></div>
+    </main>
+  </body>
+</html>

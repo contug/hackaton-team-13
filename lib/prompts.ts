@@ -22,6 +22,7 @@ Answer the user's problem using the page.
 - "answer": at most 3 sentences. Lead with the answer, not with context.
 - "steps": at most 3 steps, only if the user actually needs to do something in order. Empty array otherwise. Do not pad.
 - "refs": the "ref" ids (like "e42") of the outline elements your answer points at, most relevant first, at most 3. Empty array if none apply.
+- "target_reason": one short sentence, max 20 words, saying why the FIRST ref is where the user should go. It is shown on the page next to that element, so name what pressing or reading it does. Empty string if no single element matters.
 - "suggestions": at most 3 follow-up questions in the USER's voice.`;
 
 function renderOutline(snapshot: PageSnapshot): string {

@@ -33,3 +33,21 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/*
+ * One pulse when the ring appears, to catch the eye without becoming a
+ * permanent animation on someone else's page. The `prefers-reduced-motion`
+ * block above already neuters it — that is why this lives under the same root.
+ */
+@keyframes page-guide-ring-in {
+  from {
+    box-shadow: 0 0 0 10px rgba(56, 189, 248, 0);
+  }
+  to {
+    box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.35);
+  }
+}
+
+#page-guide-root .page-guide-ring {
+  animation: page-guide-ring-in 600ms ease-out 1;
+}

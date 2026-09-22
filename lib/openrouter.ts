@@ -28,6 +28,13 @@ export interface Answer {
   steps: string[];
   refs: string[];
   suggestions: string[];
+  /**
+   * One sentence saying why `refs[0]` is the thing to go to, which is what the
+   * on-page spotlight puts next to the element. Empty string means "no single
+   * element matters here" — a sentinel rather than a nullable field, because
+   * `strict: true` requires every property to be listed in `required`.
+   */
+  target_reason: string;
 }
 
 export interface Turn {
@@ -61,12 +68,16 @@ const SUMMARY_SCHEMA = {
 const ANSWER_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['answer', 'steps', 'refs', 'suggestions'],
+  required: ['answer', 'steps', 'refs', 'suggestions', 'target_reason'],
   properties: {
     answer: { type: 'string', description: 'At most 3 sentences.' },
     steps: { type: 'array', items: { type: 'string' }, description: 'At most 3 steps, or empty.' },
     refs: { type: 'array', items: { type: 'string' }, description: 'At most 3 outline ref ids, or empty.' },
     suggestions: { type: 'array', items: { type: 'string' }, description: "At most 3 follow-up questions in the user's voice." },
+    target_reason: {
+      type: 'string',
+      description: 'One short sentence, max 20 words, saying what the first ref is for. Empty string if no single element matters.',
+    },
   },
 } as const;
 
@@ -262,12 +273,25 @@ function clampSummary(data: Record<string, unknown>): Summary {
   };
 }
 
+const MAX_REASON_CHARS = 140;
+
+/** One short sentence: whitespace squashed, hard-capped. Brevity twice over. */
+function shortSentence(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.replace(/\s+/g, ' ').trim().slice(0, MAX_REASON_CHARS).trim();
+}
+
 function clampAnswer(data: Record<string, unknown>): Answer {
+  const refs = strArray(data.refs, 3);
   return {
     answer: typeof data.answer === 'string' ? data.answer.trim() : '',
     steps: strArray(data.steps, 3),
-    refs: strArray(data.refs, 3),
+    refs,
     suggestions: strArray(data.suggestions, 3),
+    // A reason with no ref to attach to points at nothing. Whether the ref is
+    // one we actually sent is checked later, against the outline, in
+    // `pickSpotlightRef` — this module has no snapshot to check against.
+    target_reason: refs.length > 0 ? shortSentence(data.target_reason) : '',
   };
 }
 
@@ -319,7 +343,7 @@ export async function askAboutPage(
   });
 
   if (!result.ok) {
-    return { answer: result.raw.trim(), steps: [], refs: [], suggestions: [] };
+    return { answer: result.raw.trim(), steps: [], refs: [], suggestions: [], target_reason: '' };
   }
   return clampAnswer(result.data);
 }

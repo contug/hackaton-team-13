@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Acme Billing — harness</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; font: 16px/1.5 system-ui, sans-serif; color: #111; background: #fff; }
+      header.site {
+        position: fixed; top: 0; left: 0; right: 0; height: 56px; z-index: 10;
+        display: flex; align-items: center; gap: 20px; padding: 0 24px;
+        background: #0f172a; color: #fff;
+      }
+      header.site a { color: #cbd5e1; text-decoration: none; font-size: 14px; }
+      main { max-width: 880px; margin: 0 auto; padding: 96px 24px 120px; }
+      section { margin-bottom: 64px; }
+      h1 { font-size: 30px; margin: 0 0 8px; }
+      h2 { font-size: 20px; margin: 48px 0 12px; }
+      p { color: #334155; }
+      .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+      button {
+        font: inherit; padding: 9px 16px; border-radius: 8px;
+        border: 1px solid #cbd5e1; background: #fff; cursor: pointer;
+      }
+      button.primary { background: #0f172a; color: #fff; border-color: #0f172a; }
+      button.danger { color: #b91c1c; border-color: #fca5a5; }
+      label { display: block; font-size: 13px; color: #475569; margin: 14px 0 4px; }
+      input, select { font: inherit; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; width: 280px; }
+      .scroller { height: 220px; overflow: auto; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; }
+      .scroller .filler { height: 480px; }
+      .corner { position: fixed; right: 24px; bottom: 26px; z-index: 5; }
+      .spacer { height: 1400px; }
+      .muted { color: #64748b; font-size: 14px; }
+    </style>
+  </head>
+  <body>
+    <header class="site">
+      <strong>Acme</strong>
+      <a href="/#overview">Overview</a>
+      <a href="/#usage">Usage</a>
+      <a href="/#billing">Billing</a>
+      <a href="/#support">Support</a>
+    </header>
+
+    <main>
+      <section>
+        <h1>Billing &amp; subscription</h1>
+        <p>
+          Your workspace is on the Pro plan, billed yearly. The next charge is scheduled for
+          12 March. Changes to your plan take effect at the start of the next billing period,
+          except downgrades, which take effect immediately and are prorated against the
+          remaining balance on your account.
+        </p>
+        <div class="row">
+          <button class="primary" type="button">Change plan</button>
+          <button type="button">Download invoices</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Payment method</h2>
+        <p class="muted">Visa ending 4242, expires 09/28.</p>
+        <form>
+          <label for="card">Card number</label>
+          <input id="card" name="card" type="text" placeholder="•••• •••• •••• 4242" required />
+          <label for="country">Billing country</label>
+          <select id="country" name="country">
+            <option>United Kingdom</option>
+            <option>Italy</option>
+          </select>
+          <div class="row" style="margin-top: 16px">
+            <button type="button">Update payment method</button>
+          </div>
+        </form>
+      </section>
+
+      <section>
+        <h2>Recent activity</h2>
+        <p class="muted">This list scrolls on its own — the spotlight has to follow it.</p>
+        <div class="scroller">
+          <p>12 Feb — invoice #4823 paid</p>
+          <p>12 Jan — invoice #4711 paid</p>
+          <p>12 Dec — invoice #4602 paid</p>
+          <div class="filler"></div>
+          <button type="button">Dispute a charge</button>
+        </div>
+      </section>
+
+      <div class="spacer"></div>
+
+      <section>
+        <h2>Close your account</h2>
+        <p>
+          Cancelling ends access at the end of the current period. Exports remain available for
+          thirty days afterwards, after which the workspace and everything in it is deleted.
+        </p>
+        <div class="row">
+          <button class="danger" type="button" id="cancel">Cancel subscription</button>
+          <button type="button">Pause instead</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Support</h2>
+        <p class="muted">
+          Padding below the cancel button on purpose: without it the page is already scrolled to
+          its maximum when the spotlight asks to centre the target, the browser clamps, and it
+          looks as though <code>block: 'center'</code> were broken.
+        </p>
+        <div class="spacer"></div>
+      </section>
+    </main>
+
+    <div class="corner">
+      <button type="button">Chat with support</button>
+    </div>
+
+    <div id="page-guide-root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

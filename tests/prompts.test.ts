@@ -131,4 +131,11 @@ describe('system prompts', () => {
     expect(SUMMARIZE_SYSTEM).toContain('max 25 words');
     expect(ASK_SYSTEM).toContain('at most 3 sentences');
   });
+
+  it('asks for one short sentence explaining the first ref', () => {
+    expect(ASK_SYSTEM).toContain('"target_reason"');
+    // The spotlight rings refs[0], so the reason has to be about that one.
+    expect(ASK_SYSTEM).toMatch(/target_reason[^\n]*first/i);
+    expect(ASK_SYSTEM).toMatch(/target_reason[^\n]*(one|single) short sentence/i);
+  });
 });

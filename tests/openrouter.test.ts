@@ -329,3 +329,79 @@ describe('listModels', () => {
     await expect(listModels('k')).rejects.toMatchObject({ name: 'OpenRouterError', status: 401 });
   });
 });
+
+describe('target_reason — the "why this element" sentence', () => {
+  it('asks for it in the schema, as a required property', async () => {
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() => completion(JSON.stringify(GOOD_ANSWER)));
+
+    await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
+
+    const schema = fetchStub.calls[0]!.body.response_format.json_schema.schema;
+    // Strict mode rejects a property that is not also in `required`, which is
+    // why the "no target" case is an empty string and not a missing field.
+    expect(schema.properties.target_reason).toBeDefined();
+    expect(schema.required).toContain('target_reason');
+  });
+
+  it('carries the reason through, squashed and trimmed', async () => {
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() =>
+      completion(
+        JSON.stringify({
+          ...GOOD_ANSWER,
+          target_reason: '  This button   starts\n the plan change.  ',
+        }),
+      ),
+    );
+
+    const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
+
+    expect(answer.target_reason).toBe('This button starts the plan change.');
+  });
+
+  it('defaults to an empty string when the model omits it', async () => {
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() => completion(JSON.stringify(GOOD_ANSWER)));
+
+    const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
+
+    expect(answer.target_reason).toBe('');
+  });
+
+  it('caps a rambling reason', async () => {
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() =>
+      completion(JSON.stringify({ ...GOOD_ANSWER, target_reason: 'word '.repeat(80) })),
+    );
+
+    const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
+
+    expect(answer.target_reason.length).toBeLessThanOrEqual(140);
+  });
+
+  it('drops a reason that points at nothing', async () => {
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() =>
+      completion(
+        JSON.stringify({ ...GOOD_ANSWER, refs: [], target_reason: 'Press the big green button.' }),
+      ),
+    );
+
+    const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
+
+    // A reason with no ref to attach to is incoherent output, not a highlight.
+    expect(answer.target_reason).toBe('');
+  });
+
+  it('is empty on the raw-text fallback, so the chain gains no new branch', async () => {
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() => completion('I cannot produce JSON today.'));
+    fetchStub.queue.push(() => completion('Still no JSON.'));
+
+    const answer = await askAboutPage('k', 'm', snapshotFixture(), 'how?', []);
+
+    expect(answer.answer).toBe('Still no JSON.');
+    expect(answer.target_reason).toBe('');
+  });
+});

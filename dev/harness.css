@@ -1,0 +1,11 @@
+/*
+ * Tailwind v4 detects its sources relative to the Vite root, which is `dev/`
+ * for the harness — so the real components and entrypoints are invisible to it
+ * and none of their utility classes get generated. Pointing at them explicitly
+ * is the harness's problem to solve, which is why this lives here and not in
+ * the shipped stylesheet.
+ */
+@import '../entrypoints/overlay.content/style.css';
+
+@source '../components';
+@source '../entrypoints';

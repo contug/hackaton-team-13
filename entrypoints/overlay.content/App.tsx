@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import AnswerCard from '@/components/AnswerCard';
+import AnswerCard, { type RefTarget } from '@/components/AnswerCard';
 import ApiKeySetup from '@/components/ApiKeySetup';
 import AskBox from '@/components/AskBox';
 import Skeleton from '@/components/Skeleton';
+import Spotlight from '@/components/Spotlight';
 import SuggestionChips from '@/components/SuggestionChips';
+// Explicit, like every other component here. It used to ride on WXT's
+// auto-imports, which only exist inside a WXT build.
+import SummaryCard from '@/components/SummaryCard';
 import { sendToBackground, type SettingsView } from '@/lib/messaging';
 import type { Answer, Summary, Turn } from '@/lib/openrouter';
 import { buildSnapshot, type PageSnapshot } from '@/lib/snapshot';
 import { DEFAULT_MODEL } from '@/lib/settings';
+import { pickSpotlightRef } from '@/lib/spotlight';
 
 /**
  * One result on screen at a time. A new result REPLACES the previous one —
@@ -19,6 +24,15 @@ type Result =
   | { kind: 'answer'; question: string; data: Answer };
 
 type View = 'loading' | 'setup' | 'assistant';
+
+/**
+ * What is ringed on the page right now. One slot, like `result`: a second
+ * highlight would be a second thing to look at.
+ *
+ * The label and the reason are captured when it is set, so the highlight does
+ * not depend on `snapshotRef.current`, which the next question overwrites.
+ */
+type Highlight = { ref: string; label: string; reason: string };
 
 export default function App() {
   const [open, setOpen] = useState(false);
@@ -35,6 +49,7 @@ export default function App() {
   // Conversation state lives here, in this tab's content script, and dies with
   // the page. Nothing is shared with other tabs or kept in the background.
   const [history, setHistory] = useState<Turn[]>([]);
+  const [spotlight, setSpotlight] = useState<Highlight | null>(null);
   const snapshotRef = useRef<PageSnapshot | null>(null);
 
   const fabRef = useRef<HTMLButtonElement>(null);
@@ -43,6 +58,8 @@ export default function App() {
   const runSummary = useCallback(async () => {
     setBusy(true);
     setError(null);
+    // A summary points at the page as a whole, not at one control.
+    setSpotlight(null);
 
     const snapshot = buildSnapshot();
     snapshotRef.current = snapshot;
@@ -76,18 +93,21 @@ export default function App() {
     void loadSettings();
   }, [open, view, loadSettings]);
 
+  // Registered only while there is something to dismiss. Capture-phase
+  // `stopPropagation` is invasive — the host page should keep its own Escape
+  // when we have nothing on screen.
   useEffect(() => {
-    if (!open) return;
+    if (!open && !spotlight) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        close();
-      }
+      if (e.key !== 'Escape') return;
+      // Capture phase: many host pages swallow keydown before it bubbles.
+      e.stopPropagation();
+      setSpotlight(null);
+      if (open) close();
     }
-    // Capture phase: many host pages swallow keydown before it bubbles.
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [open]);
+  }, [open, spotlight]);
 
   useEffect(() => {
     if (open) panelRef.current?.focus();
@@ -101,6 +121,9 @@ export default function App() {
   async function ask(question: string) {
     setBusy(true);
     setError(null);
+    // Cleared before the request, not after it: a highlight that outlived its
+    // answer would point at the last question's target while this one loads.
+    setSpotlight(null);
 
     // Re-snapshot per question: SPAs mutate constantly, and a stale outline
     // would have us pointing at controls that are no longer there.
@@ -117,19 +140,49 @@ export default function App() {
 
     setResult({ kind: 'answer', question, data: res.data });
     setHistory((prev) => [...prev, { question, answer: res.data.answer }].slice(-6));
+
+    // `pickSpotlightRef` is what keeps an invented ref id from ringing whatever
+    // element happens to hold it — the outline here is the one we just sent.
+    const ref = pickSpotlightRef(res.data.refs, snapshot.outline);
+    const entry = ref ? snapshot.outline.find((e) => e.ref === ref) : undefined;
+    setSpotlight(
+      ref && entry ? { ref, label: entry.name, reason: res.data.target_reason } : null,
+    );
   }
 
-  function refLabels(refs: string[]): string[] {
+  /** The answer's refs that exist in the outline, as clickable targets. */
+  function refTargets(refs: string[]): RefTarget[] {
     const outline = snapshotRef.current?.outline ?? [];
     return refs
-      .map((ref) => outline.find((entry) => entry.ref === ref)?.name)
-      .filter((name): name is string => Boolean(name));
+      .map((ref) => {
+        const entry = outline.find((e) => e.ref === ref);
+        return entry ? { ref, label: entry.name } : null;
+      })
+      .filter((target): target is RefTarget => target !== null);
+  }
+
+  function highlightRef(ref: string, answer: Answer) {
+    const entry = snapshotRef.current?.outline.find((e) => e.ref === ref);
+    if (!entry) return;
+    setSpotlight({
+      ref,
+      label: entry.name,
+      // `target_reason` is about the FIRST ref. For the others the name is all
+      // we can honestly show.
+      reason: ref === answer.refs[0] ? answer.target_reason : '',
+    });
   }
 
   if (dismissed) return null;
 
-  if (!open) {
-    return (
+  const suggestions =
+    result?.kind === 'summary'
+      ? result.data.suggestions
+      : result?.kind === 'answer'
+        ? result.data.suggestions
+        : [];
+
+  const fab = (
       <button
         ref={fabRef}
         type="button"
@@ -147,17 +200,9 @@ export default function App() {
           <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.8" />
         </svg>
       </button>
-    );
-  }
+  );
 
-  const suggestions =
-    result?.kind === 'summary'
-      ? result.data.suggestions
-      : result?.kind === 'answer'
-        ? result.data.suggestions
-        : [];
-
-  return (
+  const panel = (
     <div
       ref={panelRef}
       tabIndex={-1}
@@ -172,7 +217,10 @@ export default function App() {
           <button
             type="button"
             aria-label="Settings"
-            onClick={() => setView('setup')}
+            onClick={() => {
+              setSpotlight(null);
+              setView('setup');
+            }}
             className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           >
             <svg viewBox="0 0 24 24" fill="none" className="size-4" aria-hidden="true">
@@ -210,6 +258,7 @@ export default function App() {
               setView('loading');
               setResult(null);
               setHistory([]);
+              setSpotlight(null);
               void loadSettings();
             }}
             onCancel={settings.hasApiKey ? () => setView('assistant') : undefined}
@@ -241,7 +290,11 @@ export default function App() {
               <AnswerCard
                 question={result.question}
                 answer={result.data}
-                refLabels={refLabels(result.data.refs)}
+                targets={refTargets(result.data.refs)}
+                onPick={(ref) => highlightRef(ref, (result as { data: Answer }).data)}
+                highlight={
+                  spotlight ? { label: spotlight.label, reason: spotlight.reason } : undefined
+                }
               />
             )}
           </>
@@ -263,5 +316,28 @@ export default function App() {
         </footer>
       )}
     </div>
+  );
+
+  return (
+    <>
+      {/*
+        Rendered inside this tree, never through a portal to `document.body`:
+        "Hide on this page" unmounts everything here, and a portal would leave
+        the overlay behind on the host page forever. It also has to sit outside
+        the open/closed branch, because the highlight outlives the panel — the
+        user closes the panel precisely to go and touch the thing.
+      */}
+      {spotlight && (
+        <Spotlight
+          targetRef={spotlight.ref}
+          label={spotlight.label}
+          reason={spotlight.reason}
+          avoidRef={open ? panelRef : fabRef}
+          onDismiss={() => setSpotlight(null)}
+          onLost={() => setSpotlight(null)}
+        />
+      )}
+      {open ? panel : fab}
+    </>
   );
 }
