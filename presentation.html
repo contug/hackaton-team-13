@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Page Guide — Hackathon Team 13 | Accenture</title>
+<style>
+  :root {
+    --p: #A100FF;
+    --pl: #C060FF;
+    --dark: #080808;
+    --gray: #141414;
+    --gray2: #1E1E1E;
+    --white: #FFFFFF;
+    --cyan: #00DCFF;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--dark);
+    color: var(--white);
+    overflow: hidden;
+    height: 100vh; width: 100vw;
+    user-select: none;
+  }
+
+  #deck { width:100%; height:100%; position:relative; }
+
+  .slide {
+    position:absolute; inset:0;
+    display:flex; flex-direction:column;
+    opacity:0; pointer-events:none;
+    transition: opacity .5s cubic-bezier(.4,0,.2,1), transform .5s cubic-bezier(.4,0,.2,1);
+    transform: translateX(48px);
+  }
+  .slide.active { opacity:1; pointer-events:all; transform:translateX(0); }
+  .slide.exit   { opacity:0; transform:translateX(-48px); pointer-events:none; }
+
+  /* ── NAV ── */
+  #navbar {
+    position:fixed; top:0; left:0; right:0; z-index:200;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 2.5rem; height:50px;
+    background:rgba(8,8,8,.92); backdrop-filter:blur(16px);
+    border-bottom:1px solid rgba(161,0,255,.18);
+  }
+  .nav-logo { display:flex; align-items:center; gap:9px; }
+  .nav-title { font-size:.75rem; font-weight:600; letter-spacing:.07em; color:rgba(255,255,255,.5); text-transform:uppercase; }
+  .nav-title b { color:var(--pl); font-weight:700; }
+  .nav-right { display:flex; align-items:center; gap:.6rem; }
+  .slide-counter { font-size:.75rem; color:rgba(255,255,255,.28); min-width:32px; text-align:right; }
+  .nav-btn { background:none; border:1px solid rgba(161,0,255,.3); color:var(--white); width:32px; height:32px; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:.95rem; transition:all .2s; }
+  .nav-btn:hover { background:rgba(161,0,255,.18); border-color:var(--p); }
+  .nav-btn:disabled { opacity:.18; cursor:not-allowed; }
+
+  #progress { position:fixed; bottom:0; left:0; height:2px; background:var(--p); transition:width .4s ease; z-index:200; box-shadow:0 0 10px var(--p); }
+
+  #dots { position:fixed; bottom:13px; left:50%; transform:translateX(-50%); display:flex; gap:5px; z-index:200; }
+  .dot { width:5px; height:5px; border-radius:50%; background:rgba(255,255,255,.15); cursor:pointer; transition:all .3s; }
+  .dot.active { background:var(--p); box-shadow:0 0 5px var(--p); width:16px; border-radius:2.5px; }
+
+  /* ── INNER ── */
+  .inner { flex:1; display:flex; flex-direction:column; padding:62px 3.5rem 36px; max-width:1360px; margin:0 auto; width:100%; overflow:hidden; min-height:0; }
+  .two-col   { display:grid; grid-template-columns:1fr 1fr; gap:2.5rem; align-items:start; flex:1; min-height:0; }
+  .three-col { display:grid; grid-template-columns:repeat(3,1fr); gap:1.5rem; }
+
+  /* ── TYPE ── */
+  .tag   { font-size:.65rem; font-weight:800; letter-spacing:.18em; text-transform:uppercase; color:var(--pl); margin-bottom:.55rem; }
+  h1     { font-size:clamp(3.8rem,7vw,6rem); font-weight:800; line-height:.95; letter-spacing:-.01em; word-spacing:.08em; }
+  h2     { font-size:clamp(2rem,3.2vw,2.9rem); font-weight:800; letter-spacing:-.02em; line-height:1.1; margin-bottom:.2rem; }
+  h3     { font-size:1rem; font-weight:700; margin-bottom:.3rem; }
+  p      { line-height:1.65; color:rgba(255,255,255,.68); }
+  .p-lg  { font-size:1.05rem; color:rgba(255,255,255,.65); line-height:1.7; }
+  .pl    { color:var(--pl); }
+  .bar   { width:36px; height:3px; background:var(--p); border-radius:2px; margin-bottom:.65rem; }
+
+  /* ── PILLS ── */
+  .pill   { display:inline-block; padding:.2rem .75rem; border-radius:999px; font-size:.72rem; font-weight:700; letter-spacing:.04em; }
+  .pill-p { background:rgba(161,0,255,.14); color:var(--pl); border:1px solid rgba(161,0,255,.28); }
+  .pill-c { background:rgba(0,220,255,.1);  color:var(--cyan);  border:1px solid rgba(0,220,255,.22); }
+  .pill-w { background:rgba(255,255,255,.07); color:rgba(255,255,255,.7); border:1px solid rgba(255,255,255,.11); }
+
+  /* ── CARD ── */
+  .card { background:var(--gray); border:1px solid rgba(255,255,255,.06); border-radius:14px; padding:1.25rem 1.5rem; transition:border-color .2s, transform .2s; }
+  .card:hover { border-color:rgba(161,0,255,.35); transform:translateY(-2px); }
+  .card-icon { font-size:1.5rem; margin-bottom:.55rem; }
+
+  /* ── STEPS ── */
+  .steps { display:flex; flex-direction:column; gap:.85rem; }
+  .step  { display:flex; gap:.85rem; align-items:flex-start; }
+  .sn    { width:28px; height:28px; min-width:28px; border-radius:50%; background:var(--p); display:flex; align-items:center; justify-content:center; font-size:.72rem; font-weight:800; box-shadow:0 0 14px rgba(161,0,255,.45); }
+  .step-text h4 { font-size:.92rem; font-weight:700; margin-bottom:.12rem; }
+  .step-text p  { font-size:.82rem; }
+
+  /* ── BIG STAT ── */
+  .big-stat { display:flex; gap:1rem; margin-top:.9rem; }
+  .bs       { flex:1; background:var(--gray); border:1px solid rgba(255,255,255,.06); border-radius:12px; padding:.85rem 1rem; }
+  .bs-n     { font-size:2.4rem; font-weight:800; color:var(--pl); line-height:1; margin-bottom:.15rem; letter-spacing:-.02em; }
+  .bs-l     { font-size:.68rem; color:rgba(255,255,255,.42); }
+
+  /* ── BROWSER ── */
+  .brow     { background:#1C1C1E; border-radius:10px; border:1px solid rgba(255,255,255,.08); overflow:hidden; box-shadow:0 20px 48px rgba(0,0,0,.65); display:flex; flex-direction:column; }
+  .brow-bar { background:#2C2C2E; padding:8px 11px; display:flex; align-items:center; gap:8px; flex-shrink:0; }
+  .bdots    { display:flex; gap:4px; }
+  .bd       { width:9px; height:9px; border-radius:50%; }
+  .bd.r { background:#FF5F57; } .bd.y { background:#FEBC2E; } .bd.g { background:#28C840; }
+  .burl { flex:1; background:#3A3A3C; border-radius:4px; padding:3px 8px; font-size:.62rem; color:rgba(255,255,255,.4); font-family:monospace; }
+  .bbody { padding:12px; position:relative; background:#F8F9FA; }
+
+  /* ── FAKE PAGE ── */
+  .fnav  { background:#1a1a2e; color:white; padding:6px 12px; margin:-12px -12px 9px; font-size:.68rem; display:flex; align-items:center; gap:12px; }
+  .fnav b { color:#A100FF; } .fnav span { opacity:.6; }
+  .fhero { background:linear-gradient(135deg,#1a1a2e,#16213e); color:white; padding:11px; border-radius:5px; margin-bottom:7px; }
+  .fhero h3 { font-size:.82rem; margin-bottom:2px; color:white; }
+  .fhero p  { font-size:.64rem; color:rgba(255,255,255,.58); }
+  .fgrid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:4px; margin-bottom:7px; }
+  .fc    { background:white; border:1px solid #e5e7eb; border-radius:3px; padding:6px; font-size:.6rem; color:#666; }
+  .fc b  { display:block; color:#111; font-size:.64rem; margin-bottom:1px; }
+  .fform { background:white; border:1px solid #e5e7eb; border-radius:3px; padding:6px; display:flex; gap:4px; align-items:center; }
+  .fi    { flex:1; border:1px solid #d1d5db; border-radius:2px; padding:3px 5px; font-size:.6rem; color:#999; }
+  .fb    { background:#A100FF; color:white; border:none; border-radius:2px; padding:3px 9px; font-size:.6rem; cursor:pointer; }
+
+  /* ── FAB ── */
+  .fab { position:absolute; bottom:10px; right:10px; width:34px; height:34px; border-radius:50%; background:#111; border:1.5px solid rgba(255,255,255,.16); display:flex; align-items:center; justify-content:center; font-size:.88rem; box-shadow:0 4px 12px rgba(0,0,0,.5); z-index:10; }
+  .fab.pulse { animation:fp 2.2s ease-in-out infinite; }
+  @keyframes fp { 0%,100%{box-shadow:0 4px 12px rgba(0,0,0,.5);} 50%{box-shadow:0 4px 20px rgba(161,0,255,.6);} }
+
+  /* ── PANEL ── */
+  .pm { position:absolute; right:10px; background:#111; border:1px solid rgba(255,255,255,.1); border-radius:11px; overflow:hidden; box-shadow:0 10px 32px rgba(0,0,0,.65); font-family:'Segoe UI',sans-serif; z-index:10; }
+  .ph { background:#181818; padding:6px 8px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid rgba(255,255,255,.05); }
+  .ph-t { font-size:.58rem; font-weight:700; color:white; }
+  .ph-i { font-size:.58rem; color:rgba(255,255,255,.3); display:flex; gap:4px; }
+  .pb   { padding:7px; }
+  .ptldr{ font-size:.6rem; font-weight:700; color:white; margin-bottom:4px; line-height:1.4; }
+  .ppts { list-style:none; display:flex; flex-direction:column; gap:2px; margin-bottom:4px; }
+  .ppts li { font-size:.56rem; color:rgba(255,255,255,.6); display:flex; align-items:flex-start; gap:3px; }
+  .ppts li::before { content:'•'; color:#A100FF; flex-shrink:0; }
+  .pchips { display:flex; flex-wrap:wrap; gap:3px; margin-bottom:4px; }
+  .pchip  { background:rgba(161,0,255,.1); border:1px solid rgba(161,0,255,.22); color:#C060FF; font-size:.5rem; padding:2px 5px; border-radius:999px; }
+  .pask   { display:flex; gap:3px; padding-top:4px; border-top:1px solid rgba(255,255,255,.05); }
+  .pinput { flex:1; background:rgba(255,255,255,.05); border:1px solid rgba(255,255,255,.08); border-radius:4px; padding:3px 5px; font-size:.56rem; color:rgba(255,255,255,.35); }
+  .psubmit{ background:#A100FF; border:none; border-radius:4px; color:white; font-size:.56rem; padding:0 6px; cursor:pointer; }
+  .pq    { font-size:.54rem; color:rgba(255,255,255,.3); margin-bottom:3px; font-style:italic; }
+  .pans  { font-size:.58rem; color:rgba(255,255,255,.8); line-height:1.5; margin-bottom:4px; }
+  .psteps{ display:flex; flex-direction:column; gap:2px; margin-bottom:4px; }
+  .pstep { display:flex; gap:3px; align-items:flex-start; font-size:.56rem; color:rgba(255,255,255,.65); }
+  .psn   { width:12px; height:12px; min-width:12px; border-radius:50%; background:#A100FF; display:flex; align-items:center; justify-content:center; font-size:.42rem; font-weight:800; }
+  .pref  { font-size:.54rem; padding:2px 5px; background:rgba(161,0,255,.1); border:1px solid rgba(161,0,255,.2); border-radius:3px; color:#C060FF; display:inline-block; cursor:pointer; }
+
+  /* ── SPOTLIGHT ── */
+  .sring {
+    position:absolute; border:2px solid #A100FF; border-radius:5px;
+    box-shadow:0 0 0 3000px rgba(0,0,0,.44), 0 0 16px rgba(161,0,255,.65);
+    pointer-events:none; z-index:5;
+    animation:rp 2s ease-in-out infinite;
+  }
+  @keyframes rp { 0%,100%{box-shadow:0 0 0 3000px rgba(0,0,0,.44),0 0 10px rgba(161,0,255,.5);} 50%{box-shadow:0 0 0 3000px rgba(0,0,0,.44),0 0 24px rgba(161,0,255,1);} }
+  .stt {
+    position:absolute; background:#111; border:1px solid rgba(161,0,255,.4);
+    border-radius:8px; padding:8px 10px; font-family:'Segoe UI',sans-serif;
+    z-index:6; box-shadow:0 8px 24px rgba(0,0,0,.6);
+  }
+  .stt-t { font-size:.58rem; font-weight:800; color:white; margin-bottom:2px; }
+  .stt-r { font-size:.54rem; color:rgba(255,255,255,.58); line-height:1.4; }
+  .stt-x { margin-top:5px; font-size:.5rem; color:rgba(161,0,255,.65); cursor:pointer; }
+
+  /* ── SLIDE BACKGROUNDS ── */
+  #slide-1 { background:radial-gradient(ellipse 80% 55% at 50% 30%,rgba(161,0,255,.14) 0%,transparent 70%), var(--dark); }
+  .bg-a { background:radial-gradient(ellipse 65% 50% at 85% 55%,rgba(161,0,255,.08) 0%,transparent 65%), var(--dark); }
+  .bg-b { background:var(--dark); }
+
+  /* ── COVER ── */
+  #slide-1 .inner { justify-content:center; align-items:center; text-align:center; }
+  .c-logo { margin-bottom:1.8rem; }
+  .c-logo svg { width:80px; height:80px; display:block; margin:0 auto; }
+  .c-eye  { font-size:.68rem; font-weight:800; letter-spacing:.22em; text-transform:uppercase; color:rgba(255,255,255,.32); margin-bottom:1rem; }
+  .c-sub  { font-size:1.08rem; color:rgba(255,255,255,.5); max-width:480px; margin:0 auto 2rem; line-height:1.65; }
+  .c-tags { display:flex; gap:.6rem; justify-content:center; flex-wrap:wrap; }
+  .c-foot { position:absolute; bottom:32px; left:50%; transform:translateX(-50%); font-size:.68rem; color:rgba(255,255,255,.2); }
+
+  /* ── GRADIENT TEXT ── */
+  .grad { background:linear-gradient(135deg,#A100FF,#C060FF,#00DCFF); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+
+  /* ── ANIM ── */
+  @keyframes fu { from{opacity:0;transform:translateY(18px);} to{opacity:1;transform:translateY(0);} }
+  .slide.active .a1{animation:fu .45s ease .08s both;}
+  .slide.active .a2{animation:fu .45s ease .16s both;}
+  .slide.active .a3{animation:fu .45s ease .26s both;}
+  .slide.active .a4{animation:fu .45s ease .36s both;}
+  .slide.active .a5{animation:fu .45s ease .46s both;}
+  .slide.active .a6{animation:fu .45s ease .56s both;}
+
+  /* ── DIVIDER ── */
+  .div { height:1px; background:rgba(255,255,255,.06); margin:1rem 0; }
+
+  /* ── SPOTLIGHT BIG NUMBER ── */
+  .feat-num { font-size:5rem; font-weight:900; line-height:1; letter-spacing:-.04em; color:rgba(161,0,255,.12); position:absolute; top:0; right:0; pointer-events:none; }
+</style>
+</head>
+<body>
+
+<nav id="navbar">
+  <div class="nav-logo">
+    <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
+      <path d="M4 6L17 13L4 20" stroke="#A100FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="nav-title">Accenture &nbsp;·&nbsp; <b>Page Guide</b> &nbsp;·&nbsp; Team 13</span>
+  </div>
+  <div class="nav-right">
+    <span class="slide-counter" id="counter">1 / 6</span>
+    <button class="nav-btn" id="prev" onclick="go(-1)" disabled>‹</button>
+    <button class="nav-btn" id="next" onclick="go(1)">›</button>
+  </div>
+</nav>
+
+<div id="progress"></div>
+<div id="dots"></div>
+<div id="deck">
+
+<!-- ══════════════════════════════════
+     1 · COVER
+══════════════════════════════════ -->
+<section class="slide active" id="slide-1">
+  <div class="inner">
+    <div class="c-logo a1">
+      <svg viewBox="0 0 80 80" fill="none">
+        <defs>
+          <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#A100FF" stop-opacity=".25"/>
+            <stop offset="100%" stop-color="#A100FF" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <circle cx="40" cy="40" r="40" fill="url(#glow)"/>
+        <circle cx="40" cy="40" r="36" stroke="rgba(161,0,255,.3)" stroke-width="1"/>
+        <circle cx="40" cy="40" r="24" fill="rgba(161,0,255,.08)"/>
+        <path d="M16 40 L35 25 L54 40 L35 55 Z" fill="none" stroke="#A100FF" stroke-width="1.8"/>
+        <circle cx="40" cy="40" r="5" fill="#A100FF"/>
+        <circle cx="40" cy="40" r="5" fill="#A100FF" opacity=".5">
+          <animate attributeName="r" values="5;10;5" dur="2.5s" repeatCount="indefinite"/>
+          <animate attributeName="opacity" values=".5;0;.5" dur="2.5s" repeatCount="indefinite"/>
+        </circle>
+      </svg>
+    </div>
+    <div class="c-eye a2">Hackathon 2026 · Team 13</div>
+    <h1 class="a3">Page <span class="grad">Guide</span></h1>
+    <p class="c-sub a4">L'AI che capisce la pagina su cui sei — e ti dice esattamente cosa fare.</p>
+    <div class="c-tags a5">
+      <span class="pill pill-p">Chrome Extension</span>
+      <span class="pill pill-c">AI · OpenRouter</span>
+      <span class="pill pill-w">React · TypeScript</span>
+    </div>
+  </div>
+  <div class="c-foot">→ per avanzare &nbsp;·&nbsp; ← per tornare</div>
+</section>
+
+<!-- ══════════════════════════════════
+     2 · PROBLEMA
+══════════════════════════════════ -->
+<section class="slide" id="slide-2">
+  <div class="inner bg-a">
+    <div class="tag a1">Il Problema</div>
+    <h2 class="a2">Il web è <span class="pl">travolgente</span></h2>
+    <div class="bar a2"></div>
+
+    <div class="two-col" style="margin-top:.3rem; gap:2.5rem;">
+      <div>
+        <p class="p-lg a3" style="margin-bottom:1.1rem;">Ogni pagina complessa è un labirinto.<br>L'utente deve capirla da solo — in secondi.</p>
+
+        <div class="steps a4">
+          <div class="step">
+            <div class="sn">1</div>
+            <div class="step-text">
+              <h4>Pagine dense e senza guida</h4>
+              <p>Banche, dashboard, checkout — troppi elementi da capire in una volta.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="sn">2</div>
+            <div class="step-text">
+              <h4>Gli AI esistenti non vedono la pagina</h4>
+              <p>ChatGPT e Copilot rispondono in modo generico — non sanno su quale pagina sei.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="big-stat a5">
+          <div class="bs">
+            <div class="bs-n">73%</div>
+            <div class="bs-l">abbandona le pagine<br>troppo complesse</div>
+          </div>
+          <div class="bs">
+            <div class="bs-n">4s</div>
+            <div class="bs-l">prima di perdere<br>l'orientamento</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="a6">
+        <div class="brow">
+          <div class="brow-bar">
+            <div class="bdots"><div class="bd r"></div><div class="bd y"></div><div class="bd g"></div></div>
+            <div class="burl">banca-online.it/bonifico</div>
+          </div>
+          <div class="bbody" style="min-height:295px;">
+            <div class="fnav"><b>BancaOnline</b><span>Conti</span><span>Carte</span><span>Investimenti</span><span>Servizi</span><span>Assistenza</span></div>
+            <div class="fhero"><h3>Bonifico SEPA — Nuovo ordine</h3><p>Compila tutti i campi obbligatori prima di procedere alla conferma</p></div>
+            <div class="fgrid">
+              <div class="fc"><b>IBAN Destinatario</b>IT60 X054 2811…</div>
+              <div class="fc"><b>Importo (EUR)</b>—</div>
+              <div class="fc"><b>Causale</b>—</div>
+              <div class="fc"><b>Data valuta</b>22/09/2026</div>
+              <div class="fc"><b>Conto addebito</b>IT60…1234</div>
+              <div class="fc"><b>Tipo bonifico</b>Ordinario</div>
+            </div>
+            <div class="fform">
+              <div class="fi">Inserisci il codice OTP ricevuto via SMS…</div>
+              <button class="fb">Conferma</button>
+            </div>
+            <div class="fab pulse">❓</div>
+          </div>
+        </div>
+        <p style="font-size:.68rem;color:rgba(255,255,255,.28);text-align:center;margin-top:6px;">Nessuna guida → nessuna certezza → abbandono</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════
+     3 · SOLUZIONE
+══════════════════════════════════ -->
+<section class="slide" id="slide-3">
+  <div class="inner bg-b">
+    <div class="tag a1">La Soluzione</div>
+    <h2 class="a2">Una guida <span class="grad">sempre presente</span></h2>
+    <div class="bar a2"></div>
+
+    <div class="two-col" style="margin-top:.3rem; gap:2.5rem;">
+      <div class="a3">
+        <div class="brow">
+          <div class="brow-bar">
+            <div class="bdots"><div class="bd r"></div><div class="bd y"></div><div class="bd g"></div></div>
+            <div class="burl">banca-online.it/bonifico</div>
+          </div>
+          <div class="bbody" style="min-height:300px;">
+            <div class="fnav"><b>BancaOnline</b><span>Conti</span><span>Carte</span><span>Investimenti</span></div>
+            <div class="fhero"><h3>Bonifico SEPA — Nuovo ordine</h3><p>Compila i campi obbligatori</p></div>
+            <div class="fgrid">
+              <div class="fc"><b>IBAN</b>IT60 X054…</div>
+              <div class="fc"><b>Importo</b>—</div>
+              <div class="fc"><b>Causale</b>—</div>
+            </div>
+
+            <div class="pm" style="width:200px;bottom:56px;">
+              <div class="ph"><span class="ph-t">🧭 Page Guide</span><span class="ph-i"><span>⚙️</span><span>✕</span></span></div>
+              <div class="pb">
+                <div class="ptldr">Pagina per inviare un bonifico SEPA.</div>
+                <ul class="ppts">
+                  <li>Inserisci IBAN e importo del destinatario</li>
+                  <li>Specifica data e causale</li>
+                  <li>Conferma con codice OTP via SMS</li>
+                </ul>
+                <div class="pchips">
+                  <span class="pchip">Come invio l'OTP?</span>
+                  <span class="pchip">Quando arriva?</span>
+                  <span class="pchip">Commissioni?</span>
+                </div>
+                <div class="pask"><div class="pinput">Cosa stai cercando di fare?</div><button class="psubmit">Ask</button></div>
+              </div>
+            </div>
+            <div class="fab">✕</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:.8rem;">
+        <div class="card a4">
+          <div class="card-icon">⚡</div>
+          <h3>Riepilogo automatico</h3>
+          <p>Apri il pannello — l'AI ha già capito la pagina e ti dice cosa puoi fare, in 1 frase.</p>
+        </div>
+        <div class="card a5">
+          <div class="card-icon">🎯</div>
+          <h3>Una domanda, una risposta</h3>
+          <p>Scrivi cosa vuoi fare. Ricevi max 3 frasi + passi numerati. Niente chat, niente scrollback.</p>
+        </div>
+        <div class="card a6">
+          <div class="card-icon">💡</div>
+          <h3>Suggerimenti già pronti</h3>
+          <p>Chips cliccabili calibrate sulla pagina corrente — non parti mai da zero.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════
+     4 · COME SI USA
+══════════════════════════════════ -->
+<section class="slide" id="slide-4">
+  <div class="inner bg-a">
+    <div class="tag a1">Come si usa</div>
+    <h2 class="a2">Tre passi, <span class="pl">zero attrito</span></h2>
+    <div class="bar a2"></div>
+
+    <div class="three-col a3" style="margin-top:.4rem; align-items:start; flex:1; min-height:0;">
+
+      <!-- 1 -->
+      <div style="display:flex;flex-direction:column;align-items:center;gap:.6rem;">
+        <div style="font-size:3rem;font-weight:900;line-height:1;color:var(--p);text-shadow:0 0 28px rgba(161,0,255,.5);flex-shrink:0;">01</div>
+        <div class="brow" style="width:100%;height:240px;">
+          <div class="brow-bar" style="padding:6px 8px;"><div class="bdots"><div class="bd r"></div><div class="bd y"></div><div class="bd g"></div></div><div class="burl" style="font-size:.56rem;">shop.example.com/checkout</div></div>
+          <div class="bbody" style="padding:9px;min-height:190px;">
+            <div class="fnav" style="margin:-9px -9px 7px;font-size:.64rem;"><b>Shop</b><span>Cart</span><span>Checkout</span></div>
+            <div style="background:white;border:1px solid #e5e7eb;border-radius:3px;padding:6px;margin-bottom:5px;">
+              <div style="font-size:.6rem;font-weight:700;color:#111;margin-bottom:2px;">Riepilogo ordine</div>
+              <div style="font-size:.56rem;color:#666;">Scarpe Nike Air Max · €129,00</div>
+              <div style="font-size:.56rem;color:#666;">Spedizione · €9,99</div>
+              <div style="font-size:.6rem;font-weight:700;color:#111;margin-top:2px;">Totale: €138,99</div>
+            </div>
+            <div class="fform"><div class="fi" style="font-size:.56rem;">Numero carta…</div></div>
+            <div class="fab pulse" style="width:30px;height:30px;font-size:.8rem;bottom:8px;right:8px;">❓</div>
+          </div>
+        </div>
+        <p style="font-size:.8rem;font-weight:600;text-align:center;flex-shrink:0;">Clicca il <span class="pl">?</span><br>su qualsiasi pagina</p>
+      </div>
+
+      <!-- 2 -->
+      <div style="display:flex;flex-direction:column;align-items:center;gap:.6rem;">
+        <div style="font-size:3rem;font-weight:900;line-height:1;color:var(--p);text-shadow:0 0 28px rgba(161,0,255,.5);flex-shrink:0;">02</div>
+        <div class="brow" style="width:100%;height:240px;">
+          <div class="brow-bar" style="padding:6px 8px;"><div class="bdots"><div class="bd r"></div><div class="bd y"></div><div class="bd g"></div></div><div class="burl" style="font-size:.56rem;">shop.example.com/checkout</div></div>
+          <div class="bbody" style="padding:9px;min-height:190px;">
+            <div class="fnav" style="margin:-9px -9px 7px;font-size:.64rem;"><b>Shop</b><span>Cart</span><span>Checkout</span></div>
+            <div style="background:white;border:1px solid #e5e7eb;border-radius:3px;padding:4px;margin-bottom:4px;font-size:.54rem;color:#666;">Scarpe Nike · €138,99</div>
+            <div class="pm" style="width:165px;bottom:10px;">
+              <div class="ph"><span class="ph-t">🧭 Page Guide</span><span class="ph-i"><span>⊞</span><span>✕</span></span></div>
+              <div class="pb">
+                <div class="ptldr">Checkout per completare l'acquisto.</div>
+                <ul class="ppts"><li>Inserisci dati della carta</li><li>Scegli la spedizione</li><li>Conferma l'ordine</li></ul>
+                <div class="pchips"><span class="pchip">Pago con PayPal?</span><span class="pchip">Spese spedizione?</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:.8rem;font-weight:600;text-align:center;flex-shrink:0;">Riepilogo <span class="pl">automatico</span><br>della pagina</p>
+      </div>
+
+      <!-- 3 -->
+      <div style="display:flex;flex-direction:column;align-items:center;gap:.6rem;">
+        <div style="font-size:3rem;font-weight:900;line-height:1;color:var(--p);text-shadow:0 0 28px rgba(161,0,255,.5);flex-shrink:0;">03</div>
+        <div class="brow" style="width:100%;height:240px;">
+          <div class="brow-bar" style="padding:6px 8px;"><div class="bdots"><div class="bd r"></div><div class="bd y"></div><div class="bd g"></div></div><div class="burl" style="font-size:.56rem;">shop.example.com/checkout</div></div>
+          <div class="bbody" style="padding:9px;min-height:190px;">
+            <div class="fnav" style="margin:-9px -9px 7px;font-size:.64rem;"><b>Shop</b><span>Cart</span><span>Checkout</span></div>
+            <div style="background:white;border:1px solid #e5e7eb;border-radius:3px;padding:4px;margin-bottom:4px;font-size:.54rem;color:#666;">Scarpe Nike · €138,99</div>
+            <div class="pm" style="width:165px;bottom:10px;">
+              <div class="ph"><span class="ph-t">🧭 Page Guide</span><span class="ph-i"><span>⊞</span><span>✕</span></span></div>
+              <div class="pb">
+                <div class="pq">Voglio pagare con PayPal</div>
+                <div class="pans">Sì, PayPal è disponibile come alternativa alla carta.</div>
+                <div class="psteps">
+                  <div class="pstep"><div class="psn">1</div>Scorri a "Metodo pagamento"</div>
+                  <div class="pstep"><div class="psn">2</div>Seleziona PayPal</div>
+                  <div class="pstep"><div class="psn">3</div>Verrai reindirizzato</div>
+                </div>
+                <span class="pref">↗ Pulsante PayPal</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p style="font-size:.8rem;font-weight:600;text-align:center;flex-shrink:0;">Risposta in <span class="pl">passi</span><br>numerati</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════
+     5 · TARGET
+══════════════════════════════════ -->
+<section class="slide" id="slide-5">
+  <div class="inner bg-a">
+    <div class="tag a1">A chi è rivolto</div>
+    <h2 class="a2">Chiunque si sia mai sentito <span class="pl">perso su una pagina</span></h2>
+    <div class="bar a2"></div>
+
+    <div class="three-col a3" style="margin-top:.4rem; align-items:stretch;">
+      <div class="card" style="display:flex;flex-direction:column;gap:.75rem;padding:1.75rem;">
+        <div style="font-size:2.5rem;">🏦</div>
+        <div>
+          <h3 style="font-size:1.05rem;margin-bottom:.35rem;">Il cliente bancario</h3>
+          <p>Bonifici, investimenti, mutui online — moduli complessi con decine di campi e zero spiegazioni.</p>
+        </div>
+        <div style="margin-top:auto;display:flex;flex-wrap:wrap;gap:.4rem;">
+          <span class="pill pill-p">Banca</span>
+          <span class="pill pill-w">Assicurazioni</span>
+          <span class="pill pill-w">Fisco online</span>
+        </div>
+      </div>
+
+      <div class="card" style="display:flex;flex-direction:column;gap:.75rem;padding:1.75rem;">
+        <div style="font-size:2.5rem;">💼</div>
+        <div>
+          <h3 style="font-size:1.05rem;margin-bottom:.35rem;">Il dipendente aziendale</h3>
+          <p>ERP, portali HR, gestionali interni — strumenti potenti ma pensati per esperti, non per l'utente medio.</p>
+        </div>
+        <div style="margin-top:auto;display:flex;flex-wrap:wrap;gap:.4rem;">
+          <span class="pill pill-p">ERP / SAP</span>
+          <span class="pill pill-w">Portali HR</span>
+          <span class="pill pill-w">CRM</span>
+        </div>
+      </div>
+
+      <div class="card" style="display:flex;flex-direction:column;gap:.75rem;padding:1.75rem;">
+        <div style="font-size:2.5rem;">🛒</div>
+        <div>
+          <h3 style="font-size:1.05rem;margin-bottom:.35rem;">L'acquirente online</h3>
+          <p>Checkout con troppi passaggi, metodi di pagamento nascosti, codici sconto che non trovano mai.</p>
+        </div>
+        <div style="margin-top:auto;display:flex;flex-wrap:wrap;gap:.4rem;">
+          <span class="pill pill-p">E-commerce</span>
+          <span class="pill pill-w">Prenotazioni</span>
+          <span class="pill pill-w">Abbonamenti</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="a4" style="margin-top:.75rem;padding:1rem 1.5rem;background:rgba(161,0,255,.06);border:1px solid rgba(161,0,255,.15);border-radius:10px;display:flex;align-items:center;gap:1rem;">
+      <span style="font-size:1.6rem;flex-shrink:0;">🌍</span>
+      <p style="font-size:.92rem;color:rgba(255,255,255,.75);">Qualsiasi utente, su qualsiasi sito. Page Guide non richiede configurazione per il sito visitato — funziona su <strong style="color:var(--pl);">tutte le pagine HTTP/S</strong> automaticamente.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════
+     6 · SPOTLIGHT
+══════════════════════════════════ -->
+<section class="slide" id="slide-6">
+  <div class="inner bg-b">
+    <div class="tag a1">Nuova Feature</div>
+    <h2 class="a2"><span class="grad">Spotlight</span> — Vedi esattamente dove andare</h2>
+    <div class="bar a2"></div>
+
+    <div class="two-col" style="margin-top:.3rem; gap:3rem; align-items:start;">
+
+      <!-- BROWSER GRANDE CON SPOTLIGHT -->
+      <div class="a3">
+        <div class="brow">
+          <div class="brow-bar">
+            <div class="bdots"><div class="bd r"></div><div class="bd y"></div><div class="bd g"></div></div>
+            <div class="burl">banca-online.it/bonifico</div>
+          </div>
+          <div class="bbody" style="min-height:330px; overflow:hidden;">
+            <div class="fnav"><b>BancaOnline</b><span>Conti</span><span>Carte</span><span>Servizi</span></div>
+            <div class="fhero" style="margin-bottom:6px;"><h3>Bonifico SEPA — Nuovo ordine</h3><p>Compila i campi e conferma con OTP</p></div>
+            <div class="fgrid" style="margin-bottom:6px;">
+              <div class="fc"><b>IBAN</b>IT60 X054…</div>
+              <div class="fc"><b>Importo</b>€ 250,00</div>
+              <div class="fc"><b>Causale</b>Affitto</div>
+            </div>
+            <div class="fform" style="position:relative;">
+              <div class="fi">Inserisci codice OTP…</div>
+              <button class="fb" style="position:relative;z-index:7;">Conferma</button>
+            </div>
+
+            <!-- RING -->
+            <div class="sring" style="bottom:9px;right:11px;width:63px;height:22px;"></div>
+
+            <!-- TOOLTIP -->
+            <div class="stt" style="bottom:38px;right:9px;width:148px;">
+              <div class="stt-t">Pulsante Conferma</div>
+              <div class="stt-r">Clicca qui per completare il pagamento dopo l'OTP.</div>
+              <div class="stt-x">✕ Chiudi evidenziazione</div>
+            </div>
+
+            <!-- PANEL -->
+            <div class="pm" style="width:185px;bottom:66px;">
+              <div class="ph"><span class="ph-t">🧭 Page Guide</span><span class="ph-i"><span>⊞</span><span>✕</span></span></div>
+              <div class="pb">
+                <div class="pq">Come completo il bonifico?</div>
+                <div class="pans">Inserisci l'OTP via SMS, poi clicca Conferma.</div>
+                <div class="psteps">
+                  <div class="pstep"><div class="psn">1</div>Controlla gli SMS per l'OTP</div>
+                  <div class="pstep"><div class="psn">2</div>Digita il codice nel campo</div>
+                  <div class="pstep"><div class="psn">3</div>Clicca <b>Conferma</b></div>
+                </div>
+                <span class="pref">↗ Pulsante Conferma</span>
+              </div>
+            </div>
+            <div class="fab" style="width:30px;height:30px;font-size:.8rem;bottom:8px;right:8px;">✕</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DESCRIZIONE -->
+      <div>
+        <div class="steps a4">
+          <div class="step">
+            <div class="sn">1</div>
+            <div class="step-text">
+              <h4>L'AI cita un elemento della pagina</h4>
+              <p>La risposta include un riferimento a un pulsante o campo preciso.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="sn">2</div>
+            <div class="step-text">
+              <h4>Clicca il riferimento</h4>
+              <p>Un <strong style="color:var(--pl);">ring viola</strong> appare sull'elemento. Il resto della pagina si oscura.</p>
+            </div>
+          </div>
+          <div class="step">
+            <div class="sn">3</div>
+            <div class="step-text">
+              <h4>Tooltip: perché proprio lì</h4>
+              <p>Una riga spiega il perché. In un secondo sai dove andare — senza cercare.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="div a5"></div>
+
+        <div style="display:flex;flex-direction:column;gap:.55rem;" class="a5">
+          <div style="display:flex;align-items:center;gap:.7rem;padding:.7rem .9rem;background:var(--gray);border:1px solid rgba(255,255,255,.05);border-radius:9px;">
+            <span style="font-size:1.2rem;">🏝️</span>
+            <div>
+              <div style="font-size:.85rem;font-weight:700;">Zero impatto sulla pagina</div>
+              <p style="font-size:.76rem;">Il ring vive nel nostro layer — la pagina host non viene toccata.</p>
+            </div>
+          </div>
+          <div style="display:flex;align-items:center;gap:.7rem;padding:.7rem .9rem;background:var(--gray);border:1px solid rgba(255,255,255,.05);border-radius:9px;">
+            <span style="font-size:1.2rem;">🔄</span>
+            <div>
+              <div style="font-size:.85rem;font-weight:700;">Segue la pagina</div>
+              <p style="font-size:.76rem;">Si aggiorna allo scroll, scompare se l'elemento viene rimosso.</p>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:1.1rem;padding:1rem 1.25rem;background:var(--gray2);border-left:3px solid var(--p);border-radius:0 10px 10px 0;" class="a6">
+          <p style="font-size:.95rem;line-height:1.65;color:rgba(255,255,255,.82);font-style:italic;">"Non ti diciamo dove guardare — <em>te lo mostriamo</em>."</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+  const TOTAL = 6;
+  let current = 1;
+  const dotsEl = document.getElementById('dots');
+  for (let i = 1; i <= TOTAL; i++) {
+    const d = document.createElement('div');
+    d.className = 'dot' + (i === 1 ? ' active' : '');
+    d.onclick = () => goTo(i);
+    dotsEl.appendChild(d);
+  }
+  function updateUI() {
+    document.getElementById('counter').textContent = current + ' / ' + TOTAL;
+    document.getElementById('prev').disabled = current <= 1;
+    document.getElementById('next').disabled = current >= TOTAL;
+    document.getElementById('progress').style.width = ((current / TOTAL) * 100) + '%';
+    document.querySelectorAll('.dot').forEach((d, i) => d.className = 'dot' + (i + 1 === current ? ' active' : ''));
+  }
+  function goTo(n) {
+    if (n < 1 || n > TOTAL || n === current) return;
+    const prevEl = document.getElementById('slide-' + current);
+    prevEl.classList.remove('active'); prevEl.classList.add('exit');
+    setTimeout(() => prevEl.classList.remove('exit'), 500);
+    current = n;
+    document.getElementById('slide-' + current).classList.add('active');
+    updateUI();
+  }
+  function go(dir) { goTo(current + dir); }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); go(1); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); go(-1); }
+  });
+  let tx = 0;
+  document.addEventListener('touchstart', e => tx = e.touches[0].clientX);
+  document.addEventListener('touchend', e => { const dx = e.changedTouches[0].clientX - tx; if (Math.abs(dx) > 50) go(dx < 0 ? 1 : -1); });
+  updateUI();
+</script>
+</body>
+</html>
