@@ -64,3 +64,15 @@ Newest entries at the bottom. See `CLAUDE.md` for the entry format and the rules
 **Why:** Stating the boundary rather than letting 118 green tests imply coverage they do not have. "The panel actually renders on a real page" is still confirmed only by `npm run dev` and a human looking at it.
 **Files:** none
 **Verify:** Unchanged from the 12:37 entry — `npm run dev` and check the floating button appears.
+
+## 2026-09-22 14:09 — feat/ui-resize fast-forwarded onto the vitest suite
+**What:** `git merge --ff-only tests/vitest-suite` moved this branch from 0cb0f04 to d627860. The branch had no commits of its own, so this is a fast-forward, not a merge commit — the suite, the `PostToolUse` hook and the revised `CLAUDE.md` now apply here.
+**Why:** UI-resize work needs the "one answer on screen at a time" and snapshot tests in place before it starts, so a regression in the panel's state machine fails loudly instead of being eyeballed. Taken from `tests/vitest-suite` rather than `feat/spotlight` — both point at the same commit, and this keeps the branch independent of spotlight.
+**Files:** none authored here; 22 files arrived with d627860
+**Verify:** `npm install` (229 new packages), then `npm run check` → `tsc --noEmit` clean, 118 tests in 9 files pass.
+
+## 2026-09-22 14:18 — "Enlarge panel" button in the panel header
+**What:** A third icon button in the panel top bar toggles the panel between 360×480 and 540×720 — half again as wide and half again as tall. The single hard-coded size string on the panel root was split into `PANEL_BASE` + a `PANEL_SIZE` map keyed by an `enlarged` boolean, and the enlarged variant carries `max-w-[calc(100vw_-_2.5rem)]` / `max-h-[min(720px,calc(100vh_-_2.5rem))]` viewport clamps. State is ephemeral React state, like `open` and `dismissed`.
+**Why:** A long summary or a multi-line answer was cramped in 360×480 and the user had no way to give it room. Kept out of `storage` deliberately: a UI size flag needs neither the CSP protection nor the key containment that put the rest of the state in the background, and per-page size matches the per-tab isolation rule. The clamps are not decoration — the panel is anchored `bottom-5` and grows upward, so an unguarded 720px would push the header, and with it the restore and close buttons, off the top of a short viewport. Unlike Settings, the button is not gated on `view === 'assistant'`: the extra room helps on the setup form too.
+**Files:** entrypoints/overlay.content/App.tsx, tests/App.test.tsx, claude-changelog.md
+**Verify:** `npm test -- tests/App.test.tsx` — "panel size > enlarges the panel by half and restores it" and "panel size > offers the size control before the API key is set"; 120 tests pass overall and `tsc --noEmit` is clean via `npm run check`. Proved the first test can go red by pinning the class to `PANEL_SIZE['normal']` — it failed; reverted. `npx wxt build` emits all four arbitrary-value classes; Tailwind unwraps the nested `calc()` to `min(720px,100vh - 2.5rem)`, which Chrome accepts (checked in a real browser: at 500×600 the computed max-height is 560px and the panel renders 460px wide, so the clamps bite).
