@@ -560,3 +560,39 @@ describe('hiding on this page', () => {
     expect(screen.queryByRole('button', { name: 'Open Page Guide' })).not.toBeInTheDocument();
   });
 });
+
+describe('panel size', () => {
+  it('enlarges the panel by half and restores it', async () => {
+    routes({
+      getSettings: { ok: true, data: { hasApiKey: true, model: 'a/b' } },
+      summarize: { ok: true, data: SUMMARY },
+    });
+
+    const user = await openPanel();
+    await screen.findByText(SUMMARY.tldr);
+
+    const panel = screen.getByRole('dialog');
+    expect(panel).toHaveClass('w-[360px]', 'max-h-[480px]');
+
+    await user.click(screen.getByRole('button', { name: 'Enlarge panel' }));
+
+    // 360 -> 540 and 480 -> 720: half again as wide, half again as tall.
+    expect(panel).toHaveClass('w-[540px]', 'max-h-[min(720px,calc(100vh_-_2.5rem))]');
+    expect(panel).not.toHaveClass('w-[360px]');
+
+    await user.click(screen.getByRole('button', { name: 'Restore panel size' }));
+
+    expect(panel).toHaveClass('w-[360px]', 'max-h-[480px]');
+    expect(panel).not.toHaveClass('w-[540px]');
+  });
+
+  it('offers the size control before the API key is set', async () => {
+    routes({ getSettings: { ok: true, data: { hasApiKey: false, model: 'a/b' } } });
+
+    await openPanel();
+    await screen.findByRole('button', { name: 'Enlarge panel' });
+
+    // Settings is gated on the assistant view; the size control deliberately is not.
+    expect(screen.queryByRole('button', { name: 'Settings' })).not.toBeInTheDocument();
+  });
+});

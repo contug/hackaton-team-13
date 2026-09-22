@@ -34,9 +34,25 @@ type View = 'loading' | 'setup' | 'assistant';
  */
 type Highlight = { ref: string; label: string; reason: string };
 
+const PANEL_BASE =
+  'fixed right-5 bottom-5 z-[2147483000] flex flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl transition-[width,max-height] duration-200 focus:outline-none';
+
+/**
+ * Both variants are written out in full: Tailwind scans source text, so a
+ * composed `w-[${n}px]` would never be generated. The clamps on `large` are
+ * load-bearing — the panel is anchored `bottom-5` and grows upward, so on a
+ * short viewport an unguarded 720px would push the header, and with it these
+ * very buttons, off the top of the screen.
+ */
+const PANEL_SIZE = {
+  normal: 'w-[360px] max-h-[480px]',
+  large: 'w-[540px] max-w-[calc(100vw_-_2.5rem)] max-h-[min(720px,calc(100vh_-_2.5rem))]',
+} as const;
+
 export default function App() {
   const [open, setOpen] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  const [enlarged, setEnlarged] = useState(false);
 
   const [view, setView] = useState<View>('loading');
   const [settings, setSettings] = useState<SettingsView>({ hasApiKey: false, model: DEFAULT_MODEL });
@@ -208,7 +224,7 @@ export default function App() {
       tabIndex={-1}
       role="dialog"
       aria-label="Page Guide"
-      className="fixed right-5 bottom-5 z-[2147483000] flex max-h-[480px] w-[360px] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl focus:outline-none"
+      className={`${PANEL_BASE} ${PANEL_SIZE[enlarged ? 'large' : 'normal']}`}
     >
       <header className="flex shrink-0 items-center gap-2 border-b border-slate-100 px-4 py-3">
         <h2 className="flex-1 text-sm font-semibold text-slate-900">Page Guide</h2>
@@ -233,6 +249,29 @@ export default function App() {
             </svg>
           </button>
         )}
+
+        {/* Unconditional, unlike Settings: the extra room helps just as much on
+            the setup form, and a control that comes and goes is a worse
+            affordance than one that stays put. */}
+        <button
+          type="button"
+          aria-label={enlarged ? 'Restore panel size' : 'Enlarge panel'}
+          onClick={() => setEnlarged((v) => !v)}
+          className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+        >
+          <svg viewBox="0 0 24 24" fill="none" className="size-4" aria-hidden="true">
+            <path
+              d={
+                enlarged
+                  ? 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5'
+                  : 'M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5'
+              }
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
 
         <button
           type="button"
