@@ -3,7 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import AnswerCard from '@/components/AnswerCard';
 import SummaryCard from '@/components/SummaryCard';
-import type { Answer, Summary } from '@/lib/openrouter';
+import type { Answer, Step, Summary } from '@/lib/openrouter';
 
 function summary(over: Partial<Summary> = {}): Summary {
   return {
@@ -21,9 +21,33 @@ function answer(over: Partial<Answer> = {}): Answer {
     steps: [],
     refs: [],
     suggestions: [],
-    target_reason: '',
+    goal_reached: false,
     ...over,
   };
+}
+
+function step(text: string, over: Partial<Step> = {}): Step {
+  return { text, ref: '', fill: '', ...over };
+}
+
+/**
+ * `steps`/`currentIndex`/`onPickStep` are required props, so every case states
+ * them. The default is "an answer with no walkthrough", which is still a real
+ * case — a question that needed no steps.
+ */
+function card(props: Partial<Parameters<typeof AnswerCard>[0]> = {}) {
+  return (
+    <AnswerCard
+      question="q"
+      answer={answer()}
+      steps={[]}
+      currentIndex={null}
+      onPickStep={vi.fn()}
+      targets={[]}
+      onPick={vi.fn()}
+      {...props}
+    />
+  );
 }
 
 describe('SummaryCard', () => {
@@ -52,7 +76,7 @@ describe('SummaryCard', () => {
 
 describe('AnswerCard', () => {
   it('shows the question above the answer', () => {
-    render(<AnswerCard question="how do I upgrade?" answer={answer()} targets={[]} onPick={vi.fn()} />);
+    render(card({ question: 'how do I upgrade?' }));
 
     expect(screen.getByText('how do I upgrade?')).toBeInTheDocument();
     expect(screen.getByText('Click Upgrade.')).toBeInTheDocument();
@@ -60,12 +84,10 @@ describe('AnswerCard', () => {
 
   it('numbers the steps from one', () => {
     render(
-      <AnswerCard
-        question="q"
-        answer={answer({ steps: ['Open settings', 'Press Upgrade', 'Confirm'] })}
-        targets={[]}
-        onPick={vi.fn()}
-      />,
+      card({
+        steps: [step('Open settings'), step('Press Upgrade'), step('Confirm')],
+        currentIndex: 0,
+      }),
     );
 
     const items = screen.getAllByRole('listitem');
@@ -78,19 +100,93 @@ describe('AnswerCard', () => {
   });
 
   it('omits the step list entirely when there are no steps', () => {
-    render(<AnswerCard question="q" answer={answer({ steps: [] })} targets={[]} onPick={vi.fn()} />);
+    render(card());
 
     expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
   });
 
+  it('marks the current step, and only that one', () => {
+    render(
+      card({ steps: [step('One'), step('Two'), step('Three')], currentIndex: 1 }),
+    );
+
+    const items = screen.getAllByRole('listitem');
+    expect(items[1]!.firstElementChild).toHaveAttribute('aria-current', 'step');
+    expect(items[0]!.firstElementChild).not.toHaveAttribute('aria-current');
+    expect(items[2]!.firstElementChild).not.toHaveAttribute('aria-current');
+  });
+
+  it('renders two steps that read the same, rather than dropping one', () => {
+    // The regression this pins: `key={step}` on the step string made React drop
+    // the duplicate, and "Press Continue" twice on one page is ordinary.
+    render(card({ steps: [step('Press Continue'), step('Press Continue')], currentIndex: 0 }));
+
+    expect(screen.getAllByRole('listitem')).toHaveLength(2);
+  });
+
+  it('hands the step index to onPickStep when a step is clicked', async () => {
+    const user = userEvent.setup();
+    const onPickStep = vi.fn();
+    render(card({ steps: [step('One'), step('Two')], currentIndex: 0, onPickStep }));
+
+    await user.click(screen.getByRole('button', { name: /Two/ }));
+
+    // The step list is the interactive surface: clicking one jumps the
+    // highlight there.
+    expect(onPickStep).toHaveBeenCalledWith(1);
+  });
+
+  it('announces the current step, with its position in the walkthrough', () => {
+    render(
+      card({
+        steps: [step('Type the product name'), step('Press Search')],
+        currentIndex: 1,
+      }),
+    );
+
+    // The on-page tooltip is `aria-hidden` decoration; this block is what a
+    // screen reader announces.
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('Step 2 of 2: Press Search');
+  });
+
+  it('says every step here is done once the index runs past the list', () => {
+    render(card({ steps: [step('Press Search')], currentIndex: 1 }));
+
+    expect(screen.getByRole('status')).toHaveTextContent('Every step on this page is done.');
+  });
+
+  it('says the goal is met when the model says so', () => {
+    render(card({ answer: answer({ goal_reached: true }) }));
+
+    expect(screen.getByRole('status')).toHaveTextContent("That's everything — this looks done.");
+  });
+
+  it('names a ref the user picked instead of a step, when that is what is ringed', () => {
+    render(
+      card({
+        steps: [step('Press Search')],
+        currentIndex: null,
+        targets: [{ ref: 'e2', label: 'Upgrade' }],
+        pickedLabel: 'Upgrade',
+      }),
+    );
+
+    const status = screen.getByRole('status');
+    expect(status).toHaveTextContent('Highlighted on the page: Upgrade');
+    // Exactly one sentence about exactly one highlight — never both.
+    expect(status).not.toHaveTextContent('Press Search');
+  });
+
+  it('omits the status block when nothing is highlighted and nothing is walked', () => {
+    render(card());
+
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
   it('lists the resolved targets under "On this page"', () => {
     render(
-      <AnswerCard
-        question="q"
-        answer={answer({ refs: ['e2'] })}
-        targets={[{ ref: 'e2', label: 'Upgrade' }]}
-        onPick={vi.fn()}
-      />,
+      card({ answer: answer({ refs: ['e2'] }), targets: [{ ref: 'e2', label: 'Upgrade' }] }),
     );
 
     expect(screen.getByText('On this page')).toBeInTheDocument();
@@ -98,9 +194,7 @@ describe('AnswerCard', () => {
   });
 
   it('omits "On this page" when no refs resolved to an element', () => {
-    render(
-      <AnswerCard question="q" answer={answer({ refs: ['e99'] })} targets={[]} onPick={vi.fn()} />,
-    );
+    render(card({ answer: answer({ refs: ['e99'] }) }));
 
     expect(screen.queryByText('On this page')).not.toBeInTheDocument();
   });
@@ -109,61 +203,16 @@ describe('AnswerCard', () => {
     const user = userEvent.setup();
     const onPick = vi.fn();
     render(
-      <AnswerCard
-        question="q"
-        answer={answer({ refs: ['e2'] })}
-        targets={[{ ref: 'e2', label: 'Upgrade' }]}
-        onPick={onPick}
-      />,
+      card({
+        answer: answer({ refs: ['e2'] }),
+        targets: [{ ref: 'e2', label: 'Upgrade' }],
+        onPick,
+      }),
     );
 
     await user.click(screen.getByRole('button', { name: /Upgrade/ }));
 
     // The label is display text; the ref is what resolves to a live element.
     expect(onPick).toHaveBeenCalledWith('e2');
-  });
-
-  it('names the highlighted element and why it matters, politely', () => {
-    render(
-      <AnswerCard
-        question="q"
-        answer={answer({ refs: ['e2'] })}
-        targets={[{ ref: 'e2', label: 'Upgrade' }]}
-        onPick={vi.fn()}
-        highlight={{ label: 'Upgrade', reason: 'This button starts the plan change.' }}
-      />,
-    );
-
-    // The panel is the authoritative surface: the on-page tooltip is decoration
-    // and is aria-hidden, so this block is what a screen reader announces.
-    const status = screen.getByRole('status');
-    expect(status).toHaveTextContent('Upgrade');
-    expect(status).toHaveTextContent('This button starts the plan change.');
-  });
-
-  it('names the highlighted element even when there is no reason for it', () => {
-    // Picking a non-primary ref from "On this page" moves the highlight, but
-    // `target_reason` only ever described the first one.
-    render(
-      <AnswerCard
-        question="q"
-        answer={answer({ refs: ['e2'] })}
-        targets={[{ ref: 'e2', label: 'Upgrade' }]}
-        onPick={vi.fn()}
-        highlight={{ label: 'Upgrade', reason: '' }}
-      />,
-    );
-
-    const status = screen.getByRole('status');
-    expect(status).toHaveTextContent('Highlighted on the page: Upgrade');
-    expect(status.textContent).not.toMatch(/—\s*$/);
-  });
-
-  it('omits the highlight block when nothing is highlighted', () => {
-    render(
-      <AnswerCard question="q" answer={answer()} targets={[]} onPick={vi.fn()} />,
-    );
-
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 });

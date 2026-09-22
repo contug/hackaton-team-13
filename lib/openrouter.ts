@@ -1,8 +1,10 @@
 import type { PageSnapshot } from './snapshot';
 import {
   ASK_SYSTEM,
+  NEXT_STEPS_SYSTEM,
   SUMMARIZE_SYSTEM,
   askUserMessage,
+  nextStepsUserMessage,
   summarizeUserMessage,
 } from './prompts';
 
@@ -23,18 +25,39 @@ export interface Summary {
   suggestions: string[];
 }
 
+/**
+ * One rung of the walkthrough.
+ *
+ * A step is *addressable*: it carries the ref it acts on, so the spotlight can
+ * ring it and the step watcher can tell when the user has done it. The empty
+ * string is the "not applicable" sentinel for both `ref` and `fill`, rather
+ * than a nullable field, because `strict: true` requires every property to be
+ * listed in `required`.
+ *
+ * `text` is also the tooltip copy. That is why the old `target_reason` is gone:
+ * one sentence, one source of truth.
+ */
+export interface Step {
+  /** What to do, in the user's terms. One short imperative sentence. */
+  text: string;
+  /** The outline ref to act on, or '' when the step is not about one element. */
+  ref: string;
+  /** Text to type into `ref`, or '' when the step is not a fill. */
+  fill: string;
+}
+
 export interface Answer {
   answer: string;
-  steps: string[];
+  steps: Step[];
   refs: string[];
   suggestions: string[];
   /**
-   * One sentence saying why `refs[0]` is the thing to go to, which is what the
-   * on-page spotlight puts next to the element. Empty string means "no single
-   * element matters here" — a sentinel rather than a nullable field, because
-   * `strict: true` requires every property to be listed in `required`.
+   * The model's own verdict that the goal is already met, so the walkthrough
+   * can end instead of inventing another rung. A boolean rather than an absent
+   * `steps` array: "nothing left to do" and "I could not find anything to do"
+   * are different answers and must not collapse into one.
    */
-  target_reason: string;
+  goal_reached: boolean;
 }
 
 export interface Turn {
@@ -65,18 +88,46 @@ const SUMMARY_SCHEMA = {
   },
 } as const;
 
+/**
+ * Every property is in `required`, including the two that are usually empty.
+ * That is the same strict-mode rule that forced the empty-string sentinel on
+ * the retired `target_reason`: under `strict: true` an optional property is not
+ * a thing, so "no ref" and "no fill" have to be expressible as values.
+ */
+const STEP_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['text', 'ref', 'fill'],
+  properties: {
+    text: {
+      type: 'string',
+      description: 'One short imperative sentence, max 20 words. What to do, in the user\'s terms.',
+    },
+    ref: {
+      type: 'string',
+      description:
+        'The outline ref id this step acts on, like "e42". Only ids from the outline. Empty string when the step is not about one element.',
+    },
+    fill: {
+      type: 'string',
+      description:
+        'The exact text to type into `ref`. Empty string unless this step is typing into a field.',
+    },
+  },
+} as const;
+
 const ANSWER_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['answer', 'steps', 'refs', 'suggestions', 'target_reason'],
+  required: ['answer', 'steps', 'refs', 'suggestions', 'goal_reached'],
   properties: {
     answer: { type: 'string', description: 'At most 3 sentences.' },
-    steps: { type: 'array', items: { type: 'string' }, description: 'At most 3 steps, or empty.' },
+    steps: { type: 'array', items: STEP_SCHEMA, description: 'At most 5 steps, in order, or empty.' },
     refs: { type: 'array', items: { type: 'string' }, description: 'At most 3 outline ref ids, or empty.' },
     suggestions: { type: 'array', items: { type: 'string' }, description: "At most 3 follow-up questions in the user's voice." },
-    target_reason: {
-      type: 'string',
-      description: 'One short sentence, max 20 words, saying what the first ref is for. Empty string if no single element matters.',
+    goal_reached: {
+      type: 'boolean',
+      description: 'True only when this page shows the goal is already met, so there is nothing left to do.',
     },
   },
 } as const;
@@ -273,25 +324,61 @@ function clampSummary(data: Record<string, unknown>): Summary {
   };
 }
 
-const MAX_REASON_CHARS = 140;
+const MAX_STEP_CHARS = 140;
+/** A fill is a search term or a short form value, never a paragraph. */
+const MAX_FILL_CHARS = 200;
+/**
+ * A walkthrough needs more rungs than the old "at most 3" answer did — but not
+ * many more, or the panel becomes the wall of text it exists to replace.
+ */
+const MAX_STEPS = 5;
 
 /** One short sentence: whitespace squashed, hard-capped. Brevity twice over. */
-function shortSentence(value: unknown): string {
+function shortSentence(value: unknown, max = MAX_STEP_CHARS): string {
   if (typeof value !== 'string') return '';
-  return value.replace(/\s+/g, ' ').trim().slice(0, MAX_REASON_CHARS).trim();
+  return value.replace(/\s+/g, ' ').trim().slice(0, max).trim();
+}
+
+/**
+ * The step-object counterpart to `strArray`.
+ *
+ * This exists because `strArray` silently returns `[]` for an array of objects:
+ * without it the whole walkthrough would fail closed and say nothing about why.
+ * A step with no text is dropped; a `ref` the model made up in a shape we never
+ * mint is blanked rather than kept, so it can never resolve to a live element.
+ */
+export function stepArray(value: unknown, max: number): Step[] {
+  if (!Array.isArray(value)) return [];
+
+  const steps: Step[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) continue;
+    const candidate = raw as Record<string, unknown>;
+
+    const text = shortSentence(candidate.text);
+    if (!text) continue;
+
+    const ref = typeof candidate.ref === 'string' ? candidate.ref.trim() : '';
+    steps.push({
+      text,
+      ref: /^e\d+$/.test(ref) ? ref : '',
+      fill: shortSentence(candidate.fill, MAX_FILL_CHARS),
+    });
+    if (steps.length === max) break;
+  }
+  return steps;
 }
 
 function clampAnswer(data: Record<string, unknown>): Answer {
-  const refs = strArray(data.refs, 3);
   return {
     answer: typeof data.answer === 'string' ? data.answer.trim() : '',
-    steps: strArray(data.steps, 3),
-    refs,
+    steps: stepArray(data.steps, MAX_STEPS),
+    // Whether a ref is one we actually sent is checked later, against the
+    // outline, by `pickSpotlightRef`/`resolvableSteps` — this module has no
+    // snapshot to check against.
+    refs: strArray(data.refs, 3),
     suggestions: strArray(data.suggestions, 3),
-    // A reason with no ref to attach to points at nothing. Whether the ref is
-    // one we actually sent is checked later, against the outline, in
-    // `pickSpotlightRef` — this module has no snapshot to check against.
-    target_reason: refs.length > 0 ? shortSentence(data.target_reason) : '',
+    goal_reached: data.goal_reached === true,
   };
 }
 
@@ -343,7 +430,38 @@ export async function askAboutPage(
   });
 
   if (!result.ok) {
-    return { answer: result.raw.trim(), steps: [], refs: [], suggestions: [], target_reason: '' };
+    return { answer: result.raw.trim(), steps: [], refs: [], suggestions: [], goal_reached: false };
+  }
+  return clampAnswer(result.data);
+}
+
+/**
+ * Re-plan an in-flight journey against the page the user has just landed on.
+ *
+ * No `history`: the transcript is not what survives a navigation. The goal and
+ * the list of completed step texts are, and they are the whole context — which
+ * is also why they are the only two things the background stores per tab.
+ */
+export async function nextSteps(
+  apiKey: string,
+  model: string,
+  snapshot: PageSnapshot,
+  goal: string,
+  done: string[],
+  signal?: AbortSignal,
+): Promise<Answer> {
+  const result = await chatStructured({
+    apiKey,
+    model,
+    system: NEXT_STEPS_SYSTEM,
+    messages: [{ role: 'user', content: nextStepsUserMessage(snapshot, goal, done) }],
+    schema: ANSWER_SCHEMA as unknown as Record<string, unknown>,
+    schemaName: 'page_answer',
+    signal,
+  });
+
+  if (!result.ok) {
+    return { answer: result.raw.trim(), steps: [], refs: [], suggestions: [], goal_reached: false };
   }
   return clampAnswer(result.data);
 }

@@ -1,4 +1,6 @@
 import type { BgRequest, BgResponse, BgResponseMap } from '@/lib/messaging';
+import type { Journey } from '@/lib/journey';
+import type { Step } from '@/lib/openrouter';
 import type { OutlineEntry } from '@/lib/snapshot';
 
 /**
@@ -35,16 +37,33 @@ function answerFrom(outline: OutlineEntry[], question: string) {
   const refs = ranked.slice(0, 3).map((candidate) => candidate.entry.ref);
   const best = ranked[0]?.entry;
 
+  // A two-rung walkthrough, so the harness can exercise advancing: the first
+  // step is a fill when the best match is a field, which is what puts the
+  // "Fill this in" button on screen.
+  const steps: Step[] = best
+    ? [
+        {
+          text: best.kind === 'field' ? `Type what you want into "${best.name}"` : `Press "${best.name}"`,
+          ref: best.ref,
+          fill: best.kind === 'field' ? question : '',
+        },
+        { text: 'Confirm when asked', ref: ranked[1]?.entry.ref ?? '', fill: '' },
+      ]
+    : [];
+
   return {
     answer: best
       ? `Use "${best.name}". It is the only control on this page that does that.`
       : 'Nothing on this page does that.',
-    steps: best ? [`Find "${best.name}"`, 'Confirm when asked'] : [],
+    steps,
     refs,
     suggestions: ['What happens after that?', 'Can I undo it?'],
-    target_reason: best ? `This is the "${best.name}" control you need.` : '',
+    goal_reached: false,
   };
 }
+
+/** One journey, in module scope: the harness is one page, so one tab. */
+let harnessJourney: Journey | null = null;
 
 /** Narrowed on the concrete union; the generic signature is the boundary. */
 function reply(request: BgRequest): BgResponse<unknown> {
@@ -59,6 +78,16 @@ function reply(request: BgRequest): BgResponse<unknown> {
       return { ok: true, data: SUMMARY };
     case 'ask':
       return { ok: true, data: answerFrom(request.snapshot.outline, request.question) };
+    case 'nextSteps':
+      return { ok: true, data: answerFrom(request.snapshot.outline, request.goal) };
+    case 'saveJourney':
+      harnessJourney = request.journey;
+      return { ok: true, data: { saved: true } };
+    case 'getJourney':
+      return { ok: true, data: harnessJourney };
+    case 'clearJourney':
+      harnessJourney = null;
+      return { ok: true, data: { cleared: true } };
   }
 }
 

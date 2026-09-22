@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { fakeBrowser } from 'wxt/testing/fake-browser';
 import { handle } from '@/lib/handlers';
-import { DEFAULT_MODEL, apiKeyItem, modelItem } from '@/lib/settings';
+import background from '@/entrypoints/background';
+import { DEFAULT_MODEL, apiKeyItem, modelItem, readJourney } from '@/lib/settings';
+import { startJourney, type Journey } from '@/lib/journey';
+import type { BgRequest, BgResponse } from '@/lib/messaging';
 import { completion, jsonResponse, mockFetch } from './helpers';
 import { snapshotFixture } from './fixtures';
 
@@ -113,6 +117,152 @@ describe('with no key stored', () => {
       error: 'No API key set yet.',
     });
   });
+
+  it('answers nextSteps with a friendly error instead of throwing', async () => {
+    await expect(
+      handle({ type: 'nextSteps', snapshot: snapshotFixture(), goal: 'g', done: [] }),
+    ).resolves.toEqual({ ok: false, error: 'No API key set yet.' });
+  });
+});
+
+/**
+ * The journey is the one piece of state the background is allowed to keep, so
+ * these are the tests that replace the "no background-side conversation map"
+ * doc rule that used to sit in `lib/messaging.ts`.
+ */
+describe('the per-tab journey', () => {
+  const TAB = { tab: { id: 7 } };
+
+  function journeyFor(goal: string): Journey {
+    return startJourney(goal, [{ text: 'Press Search', ref: 'e2', fill: '' }], 'https://a/', 1000);
+  }
+
+  it('round-trips a journey for the sender\'s tab', async () => {
+    const journey = journeyFor('buy wool socks');
+
+    await expect(handle({ type: 'saveJourney', journey }, TAB)).resolves.toEqual({
+      ok: true,
+      data: { saved: true },
+    });
+    await expect(handle({ type: 'getJourney' }, TAB)).resolves.toEqual({
+      ok: true,
+      data: journey,
+    });
+  });
+
+  it('reports no journey for a tab that has none', async () => {
+    await expect(handle({ type: 'getJourney' }, { tab: { id: 99 } })).resolves.toEqual({
+      ok: true,
+      data: null,
+    });
+  });
+
+  it('keeps two tabs completely independent', async () => {
+    const one = { tab: { id: 1 } };
+    const two = { tab: { id: 2 } };
+
+    await handle({ type: 'saveJourney', journey: journeyFor('buy socks') }, one);
+    await handle({ type: 'saveJourney', journey: journeyFor('cancel my plan') }, two);
+
+    // The invariant, executable at last. One key per tab rather than a shared
+    // record is also why neither save could clobber the other across an await.
+    const first = await handle({ type: 'getJourney' }, one);
+    const second = await handle({ type: 'getJourney' }, two);
+    expect((first as { data: Journey }).data.goal).toBe('buy socks');
+    expect((second as { data: Journey }).data.goal).toBe('cancel my plan');
+
+    await handle({ type: 'clearJourney' }, one);
+
+    await expect(handle({ type: 'getJourney' }, one)).resolves.toEqual({ ok: true, data: null });
+    expect(((await handle({ type: 'getJourney' }, two)) as { data: Journey }).data.goal).toBe(
+      'cancel my plan',
+    );
+  });
+
+  it('clears a journey without complaining when there was none', async () => {
+    await expect(handle({ type: 'clearJourney' }, TAB)).resolves.toEqual({
+      ok: true,
+      data: { cleared: true },
+    });
+  });
+
+  it('stores it in session storage, which dies with the browser', async () => {
+    await handle({ type: 'saveJourney', journey: journeyFor('g') }, TAB);
+
+    // `local:` would leave a stale plan on disk for a task abandoned weeks ago.
+    await expect(fakeBrowser.storage.session.get('journey:7')).resolves.toEqual({
+      'journey:7': expect.objectContaining({ goal: 'g' }),
+    });
+    await expect(fakeBrowser.storage.local.get('journey:7')).resolves.toEqual({});
+  });
+
+  for (const type of ['saveJourney', 'getJourney', 'clearJourney'] as const) {
+    it(`answers ${type} with a friendly error when there is no tab`, async () => {
+      const request = (
+        type === 'saveJourney' ? { type, journey: journeyFor('g') } : { type }
+      ) as BgRequest;
+
+      // There is no such thing as a tab-less journey. A friendly error, not a
+      // throw — and notably this is also what `runtime.sendMessage` from an
+      // extension page (options, popup) would get.
+      await expect(handle(request)).resolves.toEqual({
+        ok: false,
+        error: 'This page has no tab, so it cannot be guided.',
+      });
+    });
+  }
+});
+
+/**
+ * Everything above calls `handle` directly. This drives the **real** listener in
+ * `entrypoints/background.ts`, which is the only way to exercise the sender
+ * plumbing — `fakeBrowser.runtime.sendMessage` hands listeners an *empty*
+ * sender, so it cannot.
+ */
+describe('the background listener', () => {
+  /** `main` takes a `ContentScriptContext` the background entry never reads. */
+  function startBackground(): void {
+    (background.main as () => void)();
+  }
+
+  async function trigger(message: BgRequest, tabId: number): Promise<BgResponse<unknown>> {
+    startBackground();
+
+    return new Promise((resolve) => {
+      fakeBrowser.runtime.onMessage.trigger(
+        message,
+        // Only `tab.id` is read; a full `Tab` would be eleven fields of noise.
+        { tab: { id: tabId } } as Parameters<typeof fakeBrowser.runtime.onMessage.trigger>[1],
+        resolve as (response: unknown) => void,
+      );
+    });
+  }
+
+  it('takes the tab id from the sender the browser attached', async () => {
+    const journey = startJourney('buy socks', [], 'https://a/', 1000);
+
+    await expect(trigger({ type: 'saveJourney', journey }, 42)).resolves.toEqual({
+      ok: true,
+      data: { saved: true },
+    });
+
+    // Saved under 42 because that is what the browser said, not because the
+    // message claimed it — the message carries no tab id at all.
+    await expect(readJourney(42)).resolves.toEqual(journey);
+    await expect(readJourney(43)).resolves.toBeNull();
+  });
+
+  it('evicts a journey when its tab closes', async () => {
+    startBackground();
+    await handle({ type: 'saveJourney', journey: startJourney('g', [], 'u', 1) }, { tab: { id: 5 } });
+    // Guard against the eviction assertion passing because nothing was stored.
+    await expect(readJourney(5)).resolves.not.toBeNull();
+
+    fakeBrowser.tabs.onRemoved.trigger(5, { windowId: 1, isWindowClosing: false });
+    await vi.waitFor(async () => {
+      await expect(readJourney(5)).resolves.toBeNull();
+    });
+  });
 });
 
 describe('with a key stored', () => {
@@ -128,6 +278,38 @@ describe('with a key stored', () => {
     const call = fetchStub.calls[0]!;
     expect((call.init.headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
     expect(call.body.model).toBe('vendor/chosen');
+  });
+
+  it('re-plans from the goal and the done list on nextSteps', async () => {
+    await apiKeyItem.setValue(KEY);
+    const fetchStub = mockFetch();
+    fetchStub.queue.push(() =>
+      completion(
+        JSON.stringify({
+          answer: 'Nearly there.',
+          steps: [{ text: 'Press Add to cart', ref: 'e2', fill: '' }],
+          refs: ['e2'],
+          suggestions: [],
+          goal_reached: false,
+        }),
+      ),
+    );
+
+    const res = await handle({
+      type: 'nextSteps',
+      snapshot: snapshotFixture(),
+      goal: 'buy wool socks',
+      done: ['Press Search'],
+    });
+
+    expect(res).toMatchObject({
+      ok: true,
+      data: { steps: [{ text: 'Press Add to cart', ref: 'e2', fill: '' }] },
+    });
+    const messages = fetchStub.calls[0]!.body.messages as Array<{ content: string }>;
+    expect(messages).toHaveLength(2);
+    expect(messages[1]!.content).toContain("The user's goal: buy wool socks");
+    expect(messages[1]!.content).toContain('1. Press Search');
   });
 
   it('forwards the question and the history it was handed', async () => {

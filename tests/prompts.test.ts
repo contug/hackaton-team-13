@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { ASK_SYSTEM, SUMMARIZE_SYSTEM, askUserMessage, renderSnapshot, summarizeUserMessage } from '@/lib/prompts';
+import {
+  ASK_SYSTEM,
+  NEXT_STEPS_SYSTEM,
+  SUMMARIZE_SYSTEM,
+  askUserMessage,
+  nextStepsUserMessage,
+  renderSnapshot,
+  summarizeUserMessage,
+} from '@/lib/prompts';
 import { snapshotFixture } from './fixtures';
 
 describe('renderSnapshot', () => {
@@ -132,10 +140,69 @@ describe('system prompts', () => {
     expect(ASK_SYSTEM).toContain('at most 3 sentences');
   });
 
-  it('asks for one short sentence explaining the first ref', () => {
-    expect(ASK_SYSTEM).toContain('"target_reason"');
-    // The spotlight rings refs[0], so the reason has to be about that one.
-    expect(ASK_SYSTEM).toMatch(/target_reason[^\n]*first/i);
-    expect(ASK_SYSTEM).toMatch(/target_reason[^\n]*(one|single) short sentence/i);
+  it('no longer asks for target_reason anywhere — a step\'s own text is the copy', () => {
+    for (const prompt of [SUMMARIZE_SYSTEM, ASK_SYSTEM, NEXT_STEPS_SYSTEM]) {
+      expect(prompt).not.toContain('target_reason');
+    }
+  });
+
+  it('describes the three-key step object to both step-producing prompts', () => {
+    for (const prompt of [ASK_SYSTEM, NEXT_STEPS_SYSTEM]) {
+      expect(prompt).toContain('"text"');
+      expect(prompt).toContain('"ref"');
+      expect(prompt).toContain('"fill"');
+      // `text` is the tooltip copy, so it carries the brevity limit itself.
+      expect(prompt).toMatch(/"text"[^\n]*max 20 words/);
+      // A fill is only ever for typing — never for pressing a button.
+      expect(prompt).toMatch(/"fill"[^\n]*typing into a field/);
+      expect(prompt).toContain('at most 5 steps');
+      expect(prompt).toContain('"goal_reached"');
+    }
+  });
+
+  it('forbids inventing a ref in both step-producing prompts', () => {
+    for (const prompt of [ASK_SYSTEM, NEXT_STEPS_SYSTEM]) {
+      expect(prompt).toMatch(/ONLY ids that appear in the outline/);
+      expect(prompt).toMatch(/never invent one/);
+    }
+  });
+
+  it('tells the re-plan prompt that the user did not ask a new question', () => {
+    expect(NEXT_STEPS_SYSTEM).toMatch(/did not ask a new question/i);
+    expect(NEXT_STEPS_SYSTEM).toMatch(/Do not repeat a step the user has already done/i);
+    // The point of the whole feature: next steps on THIS page, toward the goal.
+    expect(NEXT_STEPS_SYSTEM).toMatch(/ON THIS PAGE/);
+    expect(NEXT_STEPS_SYSTEM).toMatch(/goal_reached[^\n]*already met/);
+  });
+});
+
+describe('nextStepsUserMessage', () => {
+  it('leads with the goal, then the progress, then the page', () => {
+    const message = nextStepsUserMessage(snapshotFixture(), 'buy wool socks', [
+      'Type the product name',
+      'Press Search',
+    ]);
+
+    const goalAt = message.indexOf("The user's goal: buy wool socks");
+    const doneAt = message.indexOf('1. Type the product name');
+    const pageAt = message.indexOf('URL: https://example.com/pricing');
+
+    // Order is the point: the goal outlived the navigation, the page is only
+    // evidence about how far along it the user is.
+    expect(goalAt).toBeGreaterThanOrEqual(0);
+    expect(doneAt).toBeGreaterThan(goalAt);
+    expect(pageAt).toBeGreaterThan(doneAt);
+    expect(message).toContain('2. Press Search');
+  });
+
+  it('says so explicitly when nothing has been done yet', () => {
+    const message = nextStepsUserMessage(snapshotFixture(), 'buy wool socks', []);
+
+    expect(message).toContain('Already done:\n(nothing yet)');
+  });
+
+  it('ends by asking for the next steps here', () => {
+    const message = nextStepsUserMessage(snapshotFixture(), 'g', []);
+    expect(message.trimEnd().endsWith('What are the next steps here?')).toBe(true);
   });
 });

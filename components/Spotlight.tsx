@@ -1,4 +1,6 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { canFill } from '@/lib/autofill';
+import type { Step } from '@/lib/openrouter';
 import { resolveRef } from '@/lib/refs';
 import {
   SCRIM_PAD,
@@ -11,16 +13,31 @@ import {
 } from '@/lib/spotlight';
 import { PROBE_SIZE, useSpotlightRect } from './useSpotlightRect';
 
+/** Where in the walkthrough this step sits, or null when it is not one. */
+export interface StepPosition {
+  index: number;
+  total: number;
+}
+
 interface Props {
   /** An outline ref id, e.g. "e7". Resolved fresh on every measure. */
   targetRef: string;
   /** The element's outline name, shown as the tooltip's heading. */
   label: string;
-  /** `target_reason` — why this element is the one to go to. */
-  reason: string;
+  /** The step being pointed at. Its `text` is the tooltip copy. */
+  step: Step;
+  /**
+   * `null` when the highlight is not a walkthrough step — a ref the user picked
+   * from "On this page". There is nothing to be next or to skip, so those
+   * controls are not drawn.
+   */
+  position: StepPosition | null;
   /** Our own panel or button, so the tooltip does not hide behind it. */
   avoidRef?: RefObject<HTMLElement | null>;
   onDismiss: () => void;
+  onNext: () => void;
+  onSkip: () => void;
+  onFill: () => void;
   /** The target is gone or undrawable; the owner should drop the highlight. */
   onLost: () => void;
 }
@@ -33,21 +50,30 @@ const TOOLTIP_HEIGHT_ESTIMATE = 96;
 const MAX_RING_RADIUS = 24;
 
 /**
- * Rings one element on the host page and says why, drawn entirely inside our
- * own shadow root.
+ * Rings one element on the host page and says what to do with it, drawn
+ * entirely inside our own shadow root.
  *
  * Nothing here writes to the host page — not a class, not an attribute, not a
- * style. The ring is our own box painted at the target's rect. Load-bearing
- * properties (position, geometry, z-index, pointer-events) are inline styles
- * rather than Tailwind classes, because Tailwind is not compiled in the test
- * environment and a class assertion there would prove nothing.
+ * style. The one exception is the fill, and it is not this component's doing:
+ * pressing "Fill this in" calls back up to `App.tsx`, which is where
+ * `lib/autofill.ts` is invoked. That button *is* the confirmation gate.
+ *
+ * The tooltip is the only `pointer-events: auto` layer, so every control the
+ * walkthrough needs lives in it. Load-bearing properties (position, geometry,
+ * z-index, pointer-events) are inline styles rather than Tailwind classes,
+ * because Tailwind is not compiled in the test environment and a class
+ * assertion there would prove nothing.
  */
 export default function Spotlight({
   targetRef,
   label,
-  reason,
+  step,
+  position,
   avoidRef,
   onDismiss,
+  onNext,
+  onSkip,
+  onFill,
   onLost,
 }: Props) {
   const probeRef = useRef<HTMLDivElement>(null);
@@ -59,9 +85,16 @@ export default function Spotlight({
   useLayoutEffect(() => {
     const measured = tooltipRef.current?.getBoundingClientRect().height;
     if (measured && measured !== tooltipHeight) setTooltipHeight(measured);
-  }, [reason, label, tooltipHeight, geometry]);
+  }, [step.text, label, tooltipHeight, geometry]);
 
   const radius = useRingRadius(targetRef, geometry !== null);
+
+  /**
+   * Asked on every render rather than cached, because an SPA can swap a live
+   * input for a disabled one under the same ref. `canFill` is side-effect-free
+   * and is only a couple of property reads.
+   */
+  const fillable = step.fill !== '' && canFill(resolveRef(targetRef));
 
   return (
     <>
@@ -95,8 +128,13 @@ export default function Spotlight({
           tooltipRef={tooltipRef}
           radius={radius}
           label={label}
-          reason={reason}
+          step={step}
+          position={position}
+          fillable={fillable}
           onDismiss={onDismiss}
+          onNext={onNext}
+          onSkip={onSkip}
+          onFill={onFill}
         />
       )}
     </>
@@ -121,6 +159,9 @@ function useRingRadius(targetRef: string, active: boolean): number {
   return radius;
 }
 
+const TOOLTIP_BUTTON =
+  'shrink-0 rounded px-1.5 py-0.5 text-[11px] font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400';
+
 function SpotlightLayers(props: {
   hole: Rect;
   viewport: { w: number; h: number };
@@ -130,11 +171,31 @@ function SpotlightLayers(props: {
   tooltipRef: RefObject<HTMLDivElement | null>;
   radius: number;
   label: string;
-  reason: string;
+  step: Step;
+  position: StepPosition | null;
+  fillable: boolean;
   onDismiss: () => void;
+  onNext: () => void;
+  onSkip: () => void;
+  onFill: () => void;
 }) {
-  const { hole, viewport, correction, avoid, tooltipHeight, tooltipRef, radius, label, reason, onDismiss } =
-    props;
+  const {
+    hole,
+    viewport,
+    correction,
+    avoid,
+    tooltipHeight,
+    tooltipRef,
+    radius,
+    label,
+    step,
+    position,
+    fillable,
+    onDismiss,
+    onNext,
+    onSkip,
+    onFill,
+  } = props;
 
   const placement = tooltipPlacement(
     hole,
@@ -203,7 +264,8 @@ function SpotlightLayers(props: {
             }),
           ),
           zIndex: Z_INDEX,
-          // The only layer that takes clicks, because it carries the dismiss.
+          // The only layer that takes clicks, which is why every walkthrough
+          // control lives in here.
           pointerEvents: 'auto',
         }}
       >
@@ -216,11 +278,16 @@ function SpotlightLayers(props: {
               focusable element points at it with `aria-describedby`, and IDREFs
               do not cross shadow boundaries.
             */}
+            {position && (
+              <p aria-hidden="true" className="text-[10px] font-semibold tracking-wide text-slate-400 uppercase">
+                Step {position.index + 1} of {position.total}
+              </p>
+            )}
             <p aria-hidden="true" className="truncate text-xs font-semibold text-sky-300">
               {label}
             </p>
             <p aria-hidden="true" className="mt-0.5 text-xs leading-relaxed text-slate-100">
-              {reason}
+              {step.text}
             </p>
           </div>
 
@@ -235,6 +302,50 @@ function SpotlightLayers(props: {
             </svg>
           </button>
         </div>
+
+        {(fillable || position) && (
+          <div className="mt-2 flex items-center gap-1.5 border-t border-slate-700 pt-2">
+            {/*
+              The whole autofill gate, in one button. Shown only when the step
+              suggests text AND the target is something `fillField` would
+              actually accept — never for a password, a card number or an OTP.
+            */}
+            {fillable && (
+              <button
+                type="button"
+                onClick={onFill}
+                className={`${TOOLTIP_BUTTON} bg-sky-500 text-white hover:bg-sky-400`}
+              >
+                Fill this in
+              </button>
+            )}
+
+            {position && (
+              <>
+                <span className="flex-1" />
+                {/*
+                  The watchers are heuristics and will sometimes be wrong. These
+                  two are what guarantee the user is never stuck on a step the
+                  extension thinks they have not done.
+                */}
+                <button
+                  type="button"
+                  onClick={onSkip}
+                  className={`${TOOLTIP_BUTTON} text-slate-400 hover:bg-slate-800 hover:text-white`}
+                >
+                  Skip
+                </button>
+                <button
+                  type="button"
+                  onClick={onNext}
+                  className={`${TOOLTIP_BUTTON} bg-slate-700 text-white hover:bg-slate-600`}
+                >
+                  Next
+                </button>
+              </>
+            )}
+          </div>
+        )}
       </div>
     </>
   );
